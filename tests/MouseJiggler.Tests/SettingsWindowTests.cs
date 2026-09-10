@@ -79,12 +79,15 @@ namespace MouseJiggler.Tests
             }
         }
 
-        private static SettingsV1 Settings(bool scheduleEnabled = false, int dayMask = SettingsV1.AllDaysMask)
+        private static SettingsV1 Settings(
+            bool scheduleEnabled = false,
+            int dayMask = SettingsV1.AllDaysMask,
+            bool stopped = true)
         {
             return new SettingsV1(
                 schemaVersion: 1,
                 revision: 1,
-                stopped: true,
+                stopped: stopped,
                 runMode: RunMode.Scheduled,
                 scheduleEnabled: scheduleEnabled,
                 scheduleStart: "08:00",
@@ -591,6 +594,15 @@ namespace MouseJiggler.Tests
                     LayoutSettler.Settle(form);
 
                     Label note = Find<Label>(form, "Settings changed elsewhere");
+                    Assert.False(IsEffectivelyVisible(note));
+
+                    // Edit again first. A clean form reloads silently when the echo arrives, so
+                    // a test that replays into a clean form passes whether the guard is there
+                    // or not. Dirty is the state the note exists for, and therefore the only
+                    // state that proves the guard does anything.
+                    CheckBox keepDisplayOn = Find<CheckBox>(form, "Keep display on");
+                    keepDisplayOn.Checked = false;
+                    Assert.True(apply.Enabled);
 
                     // The watcher hands this window its own write back, late, after the commit
                     // has already cleared the saving flag. Before Apply existed the window had
@@ -600,9 +612,12 @@ namespace MouseJiggler.Tests
 
                     Assert.False(IsEffectivelyVisible(note));
 
+                    // And the edit made during all that is still on screen and still pending.
+                    Assert.False(keepDisplayOn.Checked);
+                    Assert.True(apply.Enabled);
+
                     // A genuinely newer revision is still reported. The guard is about
                     // authorship, not about silencing the warning.
-                    Find<CheckBox>(form, "Keep display on").Checked = false;
 
                     store.RaiseExternalChange(new SettingsV1(
                         schemaVersion: 1,
@@ -654,11 +669,16 @@ namespace MouseJiggler.Tests
         }
 
         [Theory]
-        [InlineData(false)]
-        [InlineData(true)]
-        public void NoTwoReachableControlsShareAKeyboardShortcut(bool aboutExpanded)
+        [InlineData(false, true)]
+        [InlineData(true, true)]
+        [InlineData(false, false)]
+        [InlineData(true, false)]
+        public void NoTwoReachableControlsShareAKeyboardShortcut(bool aboutExpanded, bool stopped)
         {
-            OnFormThread(Settings(), (form, _) =>
+            // Running matters as much as stopped: the one status button reads Start in one
+            // state and Stop in the other, so a shortcut can be free in half the app's life
+            // and taken in the other half.
+            OnFormThread(Settings(stopped: stopped), (form, _) =>
             {
                 ShowOffScreen(form);
 
@@ -690,7 +710,8 @@ namespace MouseJiggler.Tests
                         // finds out is the one relying on the keyboard.
                         Assert.False(
                             claimed.ContainsKey(key),
-                            "Alt+" + key + " is claimed twice with the About section " +
+                            "Alt+" + key + " is claimed twice while " +
+                            (stopped ? "stopped" : "running") + " with the About section " +
                             (aboutExpanded ? "expanded" : "collapsed") + ": by [" +
                             (claimed.ContainsKey(key) ? claimed[key] : string.Empty) + "] and [" +
                             control.Text + "].");
@@ -698,9 +719,12 @@ namespace MouseJiggler.Tests
                         claimed[key] = control.Text;
                     }
 
-                    // The two accelerators this issue moved, present in both states.
+                    // The accelerators this issue moved, present in every state.
                     Assert.True(claimed.ContainsKey('A'), "Alt+A reaches nothing.");
                     Assert.True(claimed.ContainsKey('T'), "Alt+T reaches nothing.");
+
+                    // One key for the toggle, whichever way it currently reads.
+                    Assert.True(claimed.ContainsKey('S'), "Alt+S reaches nothing.");
                 }
                 finally
                 {

@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Read-only by default. Only the release workflow gets write access, and only in
+# the job that needs it.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: windows-2022
+
+    steps:
+      # actions/checkout v4, pinned to its reviewed commit.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      # actions/setup-dotnet v4, pinned to its reviewed commit.
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          # global.json pins the SDK with rollForward disabled, so this must match
+          # it exactly rather than floating to a newer feature band.
+          global-json-file: global.json
+
+      - name: Report toolchain
+        run: |
+          dotnet --version
+          dotnet --list-sdks
+
+      # The same script a developer runs locally, so a green run here and a green
+      # run on a desk mean the same thing. It restores with the lock enforced,
+      # builds Release, and checks the shipped payload against the allowlist.
+      - name: Build
+        shell: pwsh
+        run: ./scripts/build.ps1 -Configuration Release
+
+      # Interactive input tests stay excluded: the script clears
+      # MOUSEJIGGLER_LIVE_INPUT rather than trusting it to be unset, so anything
+      # that would move a real pointer is skipped. CI does not claim to have
+      # tested physical pointer behaviour.
+      - name: Test
+        shell: pwsh
+        run: ./scripts/test.ps1 -Configuration Release -NoBuild
+
+      - name: Upload test results
+        if: always()
+        # actions/upload-artifact v4, pinned to its reviewed commit.
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: test-results
+          path: TestResults/*.trx
+          if-no-files-found: error
+
+      # Packaging is exercised on every pull request, so a change that breaks the
+      # installer script is caught here rather than at release time. The download
+      # is hash- and signature-verified before it runs.
+      - name: Install the pinned installer compiler
+        shell: pwsh
+        run: ./scripts/install-inno.ps1
+
+      - name: Package
+        shell: pwsh
+        run: ./scripts/package.ps1 -Version 1.0.0 -SkipBuild -RequireInstaller
+
+      - name: Verify the package
+        shell: pwsh
+        run: ./scripts/verify-package.ps1 -Version 1.0.0
+
+  reproducible:
+    name: Reproducible build
+    runs-on: windows-2022
+    needs: build
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          global-json-file: global.json
+
+      # Two clean builds of the same commit must produce identical output, the
+      # executable included. Deterministic compilation makes it content-derived,
+      # so a difference here means something time-dependent or path-dependent has
+      # crept into the build. Verified locally on Windows 10 19045: three clean
+      # builds produced the same hashes for both libraries and the executable.
+      - name: Build twice and compare
+        shell: pwsh
+        run: |
+          dotnet restore MouseJiggler.sln --locked-mode
+          dotnet build MouseJiggler.sln -c Release --no-restore
+          $first = Get-ChildItem 'src/MouseJiggler.App/bin/Release/net48/*' -Include '*.dll', '*.exe' -File |
+            Sort-Object Name | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash }
+
+          Get-ChildItem 'src','tests' -Include bin,obj -Recurse -Directory | Remove-Item -Recurse -Force
+
+          dotnet restore MouseJiggler.sln --locked-mode
+          dotnet build MouseJiggler.sln -c Release --no-restore
+          $second = Get-ChildItem 'src/MouseJiggler.App/bin/Release/net48/*' -Include '*.dll', '*.exe' -File |
+            Sort-Object Name | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash }
+
+          # The wildcard on the path is load bearing: -Include is ignored without
+          # it, and an empty list compares equal to an empty list.
+          if ($first.Count -eq 0) {
+            Write-Error 'No assemblies were found to compare.'
+            exit 1
+          }
+
+          if (Compare-Object $first $second) {
+            Write-Error 'The two builds produced different output.'
+            exit 1
+          }
+
+          Write-Host 'Both builds produced identical managed assemblies.'

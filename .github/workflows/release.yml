@@ -1,0 +1,170 @@
+name: Release
+
+# Deliberately manual. There is no trigger that publishes anything on a push:
+# a release goes out because a maintainer decided it should, having seen the
+# Windows acceptance results for that exact commit.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to release, as vMAJOR.MINOR.PATCH'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare the draft release
+    runs-on: windows-2022
+
+    # Only this job may write, and only to create a draft.
+    permissions:
+      contents: write
+
+    steps:
+      - name: Validate the tag
+        shell: pwsh
+        run: |
+          $tag = '${{ github.event.inputs.tag }}'
+          if ($tag -notmatch '^v\d+\.\d+\.\d+$') {
+            Write-Error "The tag must look like v1.0.0, not '$tag'."
+            exit 1
+          }
+
+          Write-Host "Releasing $tag"
+
+      # actions/checkout v4, pinned to its reviewed commit.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.inputs.tag }}
+          fetch-depth: 0
+
+      - name: Require the tag to be reachable from main
+        shell: pwsh
+        run: |
+          # The checkout above used fetch-depth: 0, so the full history is already
+          # here. Fetching again is unnecessary, and the previous attempt passed
+          # --depth=0, which git rejects outright as not a positive number.
+          git rev-parse --verify origin/main
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error 'origin/main is not present in this checkout, so reachability cannot be established.'
+            exit 1
+          }
+
+          $commit = git rev-parse HEAD
+          git merge-base --is-ancestor $commit origin/main
+          $onMain = $LASTEXITCODE -eq 0
+
+          if (-not $onMain) {
+            # Releasing something that never landed on main would ship code nobody
+            # reviewed on the branch the project is developed on.
+            Write-Error "Commit $commit is not reachable from main."
+            exit 1
+          }
+
+          Write-Host "Commit $commit is on main."
+
+      # actions/setup-dotnet v4, pinned to its reviewed commit.
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          global-json-file: global.json
+
+      # The runner has no installer compiler. Without this step package.ps1 finds
+      # none, warns, and produces a ZIP with no installer beside it, which then
+      # fails several steps later with a message about a file count.
+      #
+      # The script checks the recorded SHA-256 and the publisher signature before
+      # it runs what it downloaded. Both are in scripts/tool-versions.json.
+      - name: Install the pinned installer compiler
+        shell: pwsh
+        run: ./scripts/install-inno.ps1
+
+      - name: Build, test and package
+        shell: pwsh
+        run: |
+          $version = '${{ github.event.inputs.tag }}'.TrimStart('v')
+
+          dotnet restore MouseJiggler.sln --locked-mode
+          dotnet build MouseJiggler.sln -c Release --no-restore
+          dotnet test MouseJiggler.sln -c Release --no-build --logger trx --results-directory TestResults
+
+          # -RequireInstaller: a release missing its installer must fail here, not
+          # look successful and be discovered by whoever downloads it.
+          ./scripts/package.ps1 -Version $version -SkipBuild -RequireInstaller
+          ./scripts/verify-package.ps1 -Version $version
+
+      - name: Write the artifact manifest
+        shell: pwsh
+        run: |
+          $commit = git rev-parse HEAD
+          $sdk = dotnet --version
+
+          $rows = Get-ChildItem artifacts -File |
+            Where-Object { $_.Extension -in @('.zip', '.exe', '.txt') } |
+            ForEach-Object {
+              [pscustomobject]@{
+                name   = $_.Name
+                bytes  = $_.Length
+                sha256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+                commit = $commit
+                sdk    = $sdk
+              }
+            }
+
+          $rows | ConvertTo-Json -Depth 3 | Set-Content artifacts/artifact-manifest.json
+
+      - name: Create or update the draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ github.event.inputs.tag }}'
+
+          # A draft, never a published release. Publishing is a deliberate act by a
+          # maintainer who has seen the acceptance results for this commit.
+          gh release view $tag --json isDraft 2>$null | Out-Null
+
+          if ($LASTEXITCODE -eq 0) {
+            # Rebuilding artifacts behind a tag somebody may already have downloaded
+            # is how two different files come to share one version number.
+            #
+            # Comparing hashes and continuing when they match is not an option here,
+            # and it is worth saying why rather than leaving it to be rediscovered.
+            # The managed payload is reproducible and verify-release.ps1 checks that
+            # it is. The containers around it are not: both the ZIP and the Inno
+            # installer embed build timestamps, so a rebuild of the same commit
+            # produces different bytes for the same contents. A rerun therefore
+            # cannot demonstrate that it would upload the same artifacts, and
+            # uploading anyway would replace files whose hashes are already
+            # published in the draft.
+            #
+            # So a rerun stops here, having changed nothing. That is the safe
+            # outcome: the existing draft and its checksums are untouched.
+            Write-Host "A release already exists for $tag. Its artifacts have been left exactly as they are."
+            Write-Host 'Rebuilding cannot reproduce the installer and ZIP byte for byte, because both embed a build timestamp,'
+            Write-Host 'so replacing them would publish different files under checksums somebody may already have.'
+            Write-Error "Delete the draft for $tag if you deliberately want it rebuilt."
+            exit 1
+          }
+
+          $uploads = @(Get-ChildItem artifacts -File |
+            Where-Object { $_.Extension -in @('.zip', '.exe', '.txt', '.json') } |
+            ForEach-Object { $_.FullName })
+
+          # Four files are expected: the ZIP, the installer, SHA256SUMS.txt and the
+          # manifest. An empty or short list would otherwise create an empty release
+          # that looks perfectly successful.
+          if ($uploads.Count -lt 4) {
+            Write-Error "Only $($uploads.Count) artifacts were found to upload."
+            exit 1
+          }
+
+          foreach ($upload in $uploads) { Write-Host "Uploading $upload" }
+
+          gh release create $tag --draft --title "Mouse Jiggler $tag" --notes-file docs/releases.md @uploads
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error 'Creating the draft release failed.'
+            exit 1
+          }

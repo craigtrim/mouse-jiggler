@@ -44,7 +44,7 @@ that warning.
 
 ## Building from source
 
-You need Windows and the .NET SDK 8.0.130, which `global.json` pins with `rollForward` disabled. The app itself targets .NET Framework 4.8, which is already present on every supported version of Windows, so building requires the SDK but running the installed app does not.
+You need Windows and the .NET SDK 8.0.131, which `global.json` pins with `rollForward` disabled. The app itself targets .NET Framework 4.8, which is already present on every supported version of Windows, so building requires the SDK but running the installed app does not.
 
     dotnet restore MouseJiggler.sln --locked-mode
     dotnet build MouseJiggler.sln -c Release --no-restore

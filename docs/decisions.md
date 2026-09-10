@@ -36,7 +36,7 @@ It is `internal`, and only `Core` declares it. Roslyn reads these attributes out
 
 ### UseWindowsForms on net48
 
-`UseWindowsForms=true` is honoured for `net48` under SDK 8.0.130 and pulls in the Windows Forms and drawing references. Removing it fails the build with `CS0234`, so no explicit `Reference` items are needed.
+`UseWindowsForms=true` is honoured for `net48` under SDK 8.0.131 and pulls in the Windows Forms and drawing references. Removing it fails the build with `CS0234`, so no explicit `Reference` items are needed.
 
 ### The x64 test host must be named explicitly
 

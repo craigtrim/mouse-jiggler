@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <RootNamespace>MouseJiggler.Core</RootNamespace>
+    <AssemblyName>MouseJiggler.Core</AssemblyName>
+  </PropertyGroup>
+
+  <!--
+    Core is pure rules and contracts: no P/Invoke, no Windows Forms, no registry,
+    no DateTime.Now. Everything reaches it as an immutable snapshot.
+  -->
+
+</Project>

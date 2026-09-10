@@ -1,5 +1,11 @@
 # Mouse Jiggler
 
+[![CI](https://github.com/craigtrim/mouse-jiggler/actions/workflows/ci.yml/badge.svg)](https://github.com/craigtrim/mouse-jiggler/actions/workflows/ci.yml)
+[![Licence: MIT](https://img.shields.io/badge/licence-MIT-yellow.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6.svg)](https://github.com/craigtrim/mouse-jiggler#readme)
+[![.NET Framework](https://img.shields.io/badge/.NET%20Framework-4.8-512BD4.svg)](https://dotnet.microsoft.com/download/dotnet-framework/net48)
+[![Architecture](https://img.shields.io/badge/arch-x64-lightgrey.svg)](https://github.com/craigtrim/mouse-jiggler#readme)
+
 A small Windows tray utility that keeps the computer awake and generates minimal mouse activity while you are away from the keyboard. It runs manually or on one daily schedule, can pause while on battery, and stays stopped until you explicitly start it again.
 
 Windows 10 22H2 and Windows 11 build 22000 or later, x64 only. Open source under the MIT licence. No accounts, no telemetry, no network traffic.
@@ -19,28 +25,6 @@ Start, Stop and the daily schedule live in the tray menu and in one Settings win
 <img src="docs/images/settings.png" alt="The Mouse Jiggler Settings window, showing the current status, the daily schedule, the behaviour switches, the startup option and the diagnostics controls." width="420">
 
 The window above is captured from the real application by `scripts/capture-screenshot.ps1`, against a scratch settings folder so it shows first-run defaults rather than anyone's configuration. The same script captures the [running, scheduled, waiting and error states](docs/acceptance/v1.0.0.md#settings-window-states) for the acceptance record.
-
-## What it deliberately does not do
-
-Each of these was decided rather than overlooked, and the reason is short enough to give.
-
-| Not included | Why |
-| --- | --- |
-| Timers and countdowns | A second way to express "until when" that has to agree with the schedule, and a second thing to persist |
-| A global hotkey | It would need its own override model, and a keep-awake utility is not something you toggle mid-sentence |
-| Several schedule windows, exceptions, profiles, holidays | One daily window covers the case this exists for; the rest is a calendar |
-| A manual "I am plugged in" switch | Power is read from Windows. A setting that let you assert otherwise would only flatten a battery |
-| Accounts, telemetry, adverts, update checks | There is no network code at all, and a test fails if any shipped assembly so much as names a networking type |
-| Third-party runtime libraries | The application ships as three assemblies it owns, and nothing else |
-
-It also does not run everywhere. ARM64 including x64 emulation, 32-bit Windows 10, Windows
-Server and Windows in S mode are all out of scope, and the installer refuses them rather than
-installing something that will not work. [docs/install.md](docs/install.md) has the full table.
-
-Releases are **unsigned**. That is a deliberate decision for version 1 rather than an
-oversight: SHA-256 checksums are published for every artifact, and Windows will still show a
-reputation warning the first time you run the installer. Nothing here tries to talk you past
-that warning.
 
 ## Building from source
 

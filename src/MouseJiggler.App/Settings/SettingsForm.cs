@@ -31,6 +31,11 @@ namespace MouseJiggler.App
     /// </remarks>
     public sealed class SettingsForm : Form
     {
+        /// <summary>Large enough for the title bar and Alt+Tab at the DPI ranges supported.</summary>
+        private const int WindowIconSize = 32;
+
+        private Icon? _windowIcon;
+
         private readonly ActivityCoordinator _coordinator;
         private readonly LocalDiagnosticSink _diagnostics;
         private readonly DiagnosticRing _diagnosticRing;
@@ -159,6 +164,14 @@ namespace MouseJiggler.App
             AutoScroll = true;
             ShowInTaskbar = true;
             MaximizeBox = false;
+
+            // WinForms does not take a form's icon from <ApplicationIcon>. That setting puts the
+            // icon on the executable for the shell and nothing else, so a form that never sets
+            // Icon shows the stock .NET one in its title bar, in Alt+Tab and on the taskbar. The
+            // same artwork the tray draws is used here, so the window and the notification area
+            // agree about what this application looks like.
+            _windowIcon = TrayIconFactory.Create(TrayIconFactory.Shape.Running, WindowIconSize);
+            Icon = _windowIcon;
 
             BuildLayout();
             LoadFromSettings();
@@ -1260,6 +1273,13 @@ namespace MouseJiggler.App
                 _coordinator.StateChanged -= OnStateChanged;
                 _coordinator.SettingsChanged -= OnSettingsChangedElsewhere;
                 _errors.Dispose();
+
+                // Built from a native HICON, which GDI does not reclaim on its own. The window
+                // is opened and closed repeatedly over a session, so leaking one each time
+                // walks the process towards its handle quota.
+                Icon = null;
+                _windowIcon?.Dispose();
+                _windowIcon = null;
             }
 
             base.Dispose(disposing);

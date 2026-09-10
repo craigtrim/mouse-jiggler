@@ -1,0 +1,14 @@
+{
+  "innoSetup": {
+    "version": "6.7.3",
+    "url": "https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe",
+    "sha256": "9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732",
+    "sizeBytes": 10592232,
+    "expectedSigner": "CN=Pyrsys B.V., O=Pyrsys B.V., S=Noord-Holland, C=NL",
+    "note": "Hash and Authenticode signature verified against the upstream GitHub release. Verify both again before use; the download page at https://jrsoftware.org/isdl.php redirects here."
+  },
+  "dotnetSdk": {
+    "version": "8.0.130",
+    "note": "Pinned in global.json with rollForward disabled."
+  }
+}

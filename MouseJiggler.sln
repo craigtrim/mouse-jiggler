@@ -1,0 +1,50 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{B9FB2535-8FEC-4FBB-B033-84EA7B8764AD}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MouseJiggler.Core", "src\MouseJiggler.Core\MouseJiggler.Core.csproj", "{DAAEF945-BD11-43DA-BFA5-0990BA3CC6D0}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MouseJiggler.Windows", "src\MouseJiggler.Windows\MouseJiggler.Windows.csproj", "{C3E95B42-2C03-4838-9578-FF1E02C3E7D0}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MouseJiggler.App", "src\MouseJiggler.App\MouseJiggler.App.csproj", "{7B6037BE-11CD-4BF3-8863-A9A592D007D1}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{67F7581B-B2AE-48C5-AEEF-D2B424400246}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MouseJiggler.Tests", "tests\MouseJiggler.Tests\MouseJiggler.Tests.csproj", "{7BD3D5E4-5CB9-47A4-AAA3-F1BC87B2BACC}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{DAAEF945-BD11-43DA-BFA5-0990BA3CC6D0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DAAEF945-BD11-43DA-BFA5-0990BA3CC6D0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DAAEF945-BD11-43DA-BFA5-0990BA3CC6D0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DAAEF945-BD11-43DA-BFA5-0990BA3CC6D0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C3E95B42-2C03-4838-9578-FF1E02C3E7D0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C3E95B42-2C03-4838-9578-FF1E02C3E7D0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C3E95B42-2C03-4838-9578-FF1E02C3E7D0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C3E95B42-2C03-4838-9578-FF1E02C3E7D0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7B6037BE-11CD-4BF3-8863-A9A592D007D1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7B6037BE-11CD-4BF3-8863-A9A592D007D1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7B6037BE-11CD-4BF3-8863-A9A592D007D1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7B6037BE-11CD-4BF3-8863-A9A592D007D1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7BD3D5E4-5CB9-47A4-AAA3-F1BC87B2BACC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7BD3D5E4-5CB9-47A4-AAA3-F1BC87B2BACC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7BD3D5E4-5CB9-47A4-AAA3-F1BC87B2BACC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7BD3D5E4-5CB9-47A4-AAA3-F1BC87B2BACC}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{DAAEF945-BD11-43DA-BFA5-0990BA3CC6D0} = {B9FB2535-8FEC-4FBB-B033-84EA7B8764AD}
+		{C3E95B42-2C03-4838-9578-FF1E02C3E7D0} = {B9FB2535-8FEC-4FBB-B033-84EA7B8764AD}
+		{7B6037BE-11CD-4BF3-8863-A9A592D007D1} = {B9FB2535-8FEC-4FBB-B033-84EA7B8764AD}
+		{7BD3D5E4-5CB9-47A4-AAA3-F1BC87B2BACC} = {67F7581B-B2AE-48C5-AEEF-D2B424400246}
+	EndGlobalSection
+EndGlobal

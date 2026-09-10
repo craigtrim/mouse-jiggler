@@ -459,5 +459,295 @@ namespace MouseJiggler.Tests
 
             return true;
         }
+
+        // ------------------------------------------------------------------------------------
+        // Apply. See issue #17.
+        //
+        // "Apply means apply. Save means Apply and Exit." Both commit exactly the same things
+        // and differ only in whether the window survives it.
+        //
+        // None of these tests touch the "Start with Windows" checkbox, deliberately.
+        // RunKeyStartupRegistration is constructed inline by the form and writes to the real
+        // HKCU Run key, and ApplyStartupChange() returns early while the checkbox still matches
+        // what was registered at load. Leaving it alone is what keeps these tests off the
+        // developer's own machine.
+        // ------------------------------------------------------------------------------------
+
+        [Fact]
+        public void ApplyIsClosedUntilThereIsSomethingToApply()
+        {
+            OnFormThread(Settings(), (form, _) =>
+            {
+                Button apply = Find<Button>(form, "Apply settings");
+                Button save = Find<Button>(form, "Save settings");
+
+                // Save is meaningful on an untouched form: it is how a keyboard user commits and
+                // leaves. Apply on an untouched form would do nothing at all.
+                Assert.False(apply.Enabled);
+                Assert.True(save.Enabled);
+            });
+        }
+
+        [Fact]
+        public void ApplyOpensAsSoonAsSomethingChanges()
+        {
+            OnFormThread(Settings(), (form, _) =>
+            {
+                Button apply = Find<Button>(form, "Apply settings");
+                Assert.False(apply.Enabled);
+
+                Find<CheckBox>(form, "Pause on battery").Checked = false;
+
+                Assert.True(apply.Enabled);
+            });
+        }
+
+        [Fact]
+        public void ApplyIsHeldClosedWhileTheDraftIsInvalid()
+        {
+            OnFormThread(Settings(scheduleEnabled: true), (form, _) =>
+            {
+                Button apply = Find<Button>(form, "Apply settings");
+                DateTimePicker start = Find<DateTimePicker>(form, "Schedule start time");
+                DateTimePicker end = Find<DateTimePicker>(form, "Schedule end time");
+
+                // An edit the store would reject must not open Apply either. One gate feeding
+                // both buttons, rather than a second copy of the rule that can drift.
+                end.Value = start.Value;
+                Assert.False(apply.Enabled);
+                Assert.False(Find<Button>(form, "Save settings").Enabled);
+
+                end.Value = start.Value.AddHours(1);
+                Assert.True(apply.Enabled);
+            });
+        }
+
+        [Fact]
+        public void ApplyCommitsTheDraftAndLeavesTheWindowOpen()
+        {
+            OnFormThread(Settings(), (form, store) =>
+            {
+                ShowOffScreen(form);
+
+                try
+                {
+                    Assert.True(store.Current.PauseOnBattery);
+
+                    Button apply = Find<Button>(form, "Apply settings");
+                    Find<CheckBox>(form, "Pause on battery").Checked = false;
+                    Assert.True(apply.Enabled);
+
+                    apply.PerformClick();
+                    LayoutSettler.Settle(form);
+
+                    // Committed.
+                    Assert.Equal(1, store.WriteAttempts);
+                    Assert.False(store.Current.PauseOnBattery);
+
+                    // And still here, which is the whole difference from Save.
+                    Assert.False(form.IsDisposed);
+                    Assert.True(form.Visible);
+
+                    // Nothing left to apply, so the button closes again while Save stays open.
+                    Assert.False(apply.Enabled);
+                    Assert.True(Find<Button>(form, "Save settings").Enabled);
+                }
+                finally
+                {
+                    form.Hide();
+                }
+            });
+        }
+
+        [Fact]
+        public void SaveStillCommitsAndCloses()
+        {
+            OnFormThread(Settings(), (form, store) =>
+            {
+                ShowOffScreen(form);
+
+                Find<CheckBox>(form, "Pause on battery").Checked = false;
+                Find<Button>(form, "Save settings").PerformClick();
+                LayoutSettler.Settle(form);
+
+                Assert.Equal(1, store.WriteAttempts);
+                Assert.False(store.Current.PauseOnBattery);
+                Assert.False(form.Visible);
+            });
+        }
+
+        [Fact]
+        public void ApplyDoesNotReportItsOwnCommitAsAnOutsideChange()
+        {
+            OnFormThread(Settings(), (form, store) =>
+            {
+                ShowOffScreen(form);
+
+                try
+                {
+                    Button apply = Find<Button>(form, "Apply settings");
+                    Find<CheckBox>(form, "Pause on battery").Checked = false;
+                    apply.PerformClick();
+                    LayoutSettler.Settle(form);
+
+                    Label note = Find<Label>(form, "Settings changed elsewhere");
+
+                    // The watcher hands this window its own write back, late, after the commit
+                    // has already cleared the saving flag. Before Apply existed the window had
+                    // closed by then. Replaying the committed revision must change nothing.
+                    store.RaiseExternalChange(store.Current);
+                    LayoutSettler.Settle(form);
+
+                    Assert.False(IsEffectivelyVisible(note));
+
+                    // A genuinely newer revision is still reported. The guard is about
+                    // authorship, not about silencing the warning.
+                    Find<CheckBox>(form, "Keep display on").Checked = false;
+
+                    store.RaiseExternalChange(new SettingsV1(
+                        schemaVersion: 1,
+                        revision: store.Current.Revision + 1,
+                        stopped: true,
+                        runMode: RunMode.Scheduled,
+                        scheduleEnabled: false,
+                        scheduleStart: "09:00",
+                        scheduleEnd: "18:00",
+                        dayMask: SettingsV1.AllDaysMask,
+                        pauseOnBattery: true,
+                        keepDisplayOn: true,
+                        jiggleMouse: true,
+                        intervalSeconds: 45,
+                        diagnosticLogging: false,
+                        startupInitialized: true,
+                        firstRunCompleted: true));
+
+                    LayoutSettler.Settle(form);
+
+                    Assert.True(IsEffectivelyVisible(note));
+                }
+                finally
+                {
+                    form.Hide();
+                }
+            });
+        }
+
+        [Fact]
+        public void ApplyTakesAltAAndTheIntervalLabelMovesToAltT()
+        {
+            OnFormThread(Settings(), (form, _) =>
+            {
+                Assert.Equal("&Apply", Find<Button>(form, "Apply settings").Text);
+
+                // Alt+A is the accelerator a Windows user expects on Apply, so the interval
+                // label gives it up. A label's mnemonic only moves focus to the next control,
+                // so nothing anybody performs changed meaning.
+                // Found by its caption with the mnemonic marker stripped, so the assertion
+                // below is about where the ampersand sits rather than a restatement of the
+                // search that found it.
+                Label interval = Assert.Single(
+                    Descendants(form).OfType<Label>(),
+                    label => label.Text.Replace("&", string.Empty) == "After");
+
+                Assert.Equal("Af&ter", interval.Text);
+            });
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void NoTwoReachableControlsShareAKeyboardShortcut(bool aboutExpanded)
+        {
+            OnFormThread(Settings(), (form, _) =>
+            {
+                ShowOffScreen(form);
+
+                try
+                {
+                    Find<CheckBox>(form, "Show about and diagnostics details").Checked = aboutExpanded;
+                    LayoutSettler.Settle(form);
+
+                    var claimed = new Dictionary<char, string>();
+
+                    foreach (Control control in Descendants(form))
+                    {
+                        if (!IsEffectivelyVisible(control))
+                        {
+                            continue;
+                        }
+
+                        char? mnemonic = MnemonicOf(control.Text);
+
+                        if (mnemonic == null)
+                        {
+                            continue;
+                        }
+
+                        char key = char.ToUpperInvariant(mnemonic.Value);
+
+                        // A duplicate does not fail loudly. Alt+key quietly cycles between the
+                        // two controls instead of pressing the button, and the only person who
+                        // finds out is the one relying on the keyboard.
+                        Assert.False(
+                            claimed.ContainsKey(key),
+                            "Alt+" + key + " is claimed twice with the About section " +
+                            (aboutExpanded ? "expanded" : "collapsed") + ": by [" +
+                            (claimed.ContainsKey(key) ? claimed[key] : string.Empty) + "] and [" +
+                            control.Text + "].");
+
+                        claimed[key] = control.Text;
+                    }
+
+                    // The two accelerators this issue moved, present in both states.
+                    Assert.True(claimed.ContainsKey('A'), "Alt+A reaches nothing.");
+                    Assert.True(claimed.ContainsKey('T'), "Alt+T reaches nothing.");
+                }
+                finally
+                {
+                    form.Hide();
+                }
+            });
+        }
+
+        /// <summary>The mnemonic a caption declares, or null when it declares none.</summary>
+        private static char? MnemonicOf(string? text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return null;
+            }
+
+            for (int i = 0; i < text!.Length - 1; i++)
+            {
+                if (text[i] != '&')
+                {
+                    continue;
+                }
+
+                // "&&" is an escaped ampersand rather than a shortcut.
+                if (text[i + 1] == '&')
+                {
+                    i++;
+                    continue;
+                }
+
+                return text[i + 1];
+            }
+
+            return null;
+        }
+
+        private static IEnumerable<Control> Descendants(Control parent)
+        {
+            foreach (Control child in parent.Controls)
+            {
+                yield return child;
+
+                foreach (Control nested in Descendants(child))
+                {
+                    yield return nested;
+                }
+            }
+        }
     }
 }

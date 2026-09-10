@@ -188,6 +188,8 @@ namespace MouseJiggler.Tests.Fakes
 
         public SettingsV1 Current => _current;
 
+        public long LastKnownRevision => _current.Revision;
+
         public bool Disposed { get; private set; }
 
         public event EventHandler<SettingsV1>? ExternalChangeObserved;
@@ -216,6 +218,19 @@ namespace MouseJiggler.Tests.Fakes
         public void RaiseExternalChange(SettingsV1 observed)
         {
             _current = observed;
+            ExternalChangeObserved?.Invoke(this, observed);
+        }
+
+        /// <summary>
+        /// Delivers an observation that no longer describes what the store holds.
+        /// </summary>
+        /// <remarks>
+        /// This is the shape of a real delivery that lost a race: the watcher read the file,
+        /// and something newer replaced it before the read reached the owner thread. The store
+        /// is deliberately left alone so the observation arrives stale. See issue #20.
+        /// </remarks>
+        public void RaiseSupersededExternalChange(SettingsV1 observed)
+        {
             ExternalChangeObserved?.Invoke(this, observed);
         }
 

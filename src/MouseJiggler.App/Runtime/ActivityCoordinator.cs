@@ -367,6 +367,16 @@ namespace MouseJiggler.App.Runtime
                 return;
             }
 
+            // Superseded while it was queued. The hop above is the gap: the file is read on the
+            // watcher's thread, and by the time this runs a reset or this session's own commit
+            // may have replaced what was read. Applying it anyway puts the app back on a
+            // document that no longer exists, and the next save writes it over whatever did
+            // replace it. See issue #20.
+            if (observed.Revision != _store.LastKnownRevision)
+            {
+                return;
+            }
+
             _settings = observed;
             Interlocked.Increment(ref _generation);
             SettingsChanged?.Invoke(this, _settings);

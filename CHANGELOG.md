@@ -104,3 +104,9 @@ because each one is a mistake worth not repeating.
   minute and sixty failures a minute produced identical output.
 - The Settings window opened at 533 logical pixels wide rather than the 540 specified, because
   the size was derived entirely from content with no floor.
+- The tray icon was a plain grey square when stopped. It said nothing about which application
+  it belonged to, which is most of what a notification area icon is for. Every state now draws
+  the same mouse and varies what the mouse is doing.
+- The Settings window showed the stock .NET icon in its title bar, in Alt+Tab and on the
+  taskbar. `<ApplicationIcon>` puts an icon on the executable for the shell and nothing else,
+  so a form that never assigns `Icon` gets the framework default.

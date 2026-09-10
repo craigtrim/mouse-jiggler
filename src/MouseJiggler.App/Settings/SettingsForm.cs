@@ -122,7 +122,19 @@ namespace MouseJiggler.App
         private bool _saving;
 
         /// <summary>
-        /// The highest settings revision this window committed itself.
+        /// Bumped by every edit, so a commit can tell whether the draft moved under it.
+        /// </summary>
+        /// <remarks>
+        /// The write is awaited, and the user keeps typing during it. Clearing _dirty on the
+        /// way out would then throw away edits made while the file was being written: Apply
+        /// would go grey, the close prompt would stay silent, and the edits still on screen
+        /// would never be committed. Comparing the count taken before the await says whether
+        /// the draft is still the one that was sent.
+        /// </remarks>
+        private int _edits;
+
+        /// <summary>
+        /// The settings revision this window committed itself.
         /// </summary>
         /// <remarks>
         /// The watcher raises this window's own commit back at it, and the _saving guard below
@@ -885,9 +897,13 @@ namespace MouseJiggler.App
             // usually finished and cleared it. Save closed the window before the queued event
             // could land, which is why it never showed. The revision is what actually separates
             // our write from anybody else's: the store increments it on every commit, so
-            // anything at or below what we last wrote is our own echo or a stale event.
+            // the revision we just wrote is our own echo coming back.
+            //
+            // Matched exactly rather than as "at or below". Resetting settings writes fresh
+            // defaults starting again at revision 1, so a window that had committed revision 5
+            // would treat every subsequent real change as old news and never refresh again.
             // See issue #17.
-            if (_saving || settings.Revision <= _committedRevision)
+            if (_saving || settings.Revision == _committedRevision)
             {
                 return;
             }
@@ -910,6 +926,7 @@ namespace MouseJiggler.App
             }
 
             _dirty = true;
+            _edits++;
             ValidateDraft();
         }
 
@@ -964,7 +981,9 @@ namespace MouseJiggler.App
             _detailLabel.Visible = _detailLabel.Text.Length > 0;
             _powerLabel.Text = "Power: " + DescribePower(effects);
 
-            _startStopButton.Text = settings.Stopped ? "&Start" : "S&top";
+            // &Stop, not S&top: this is one button that is never both things at once, so it
+            // keeps Alt+S in either state and leaves Alt+T to the interval field. See issue #17.
+            _startStopButton.Text = settings.Stopped ? "&Start" : "&Stop";
             _scheduleButton.Text = settings.ScheduleEnabled ? "Start on s&chedule" : "Start &continuously";
 
             // Retry appears exactly when there is something to retry.
@@ -1078,6 +1097,7 @@ namespace MouseJiggler.App
             _errors.Clear();
 
             SettingsPatch patch = SettingsPresenter.ToPatch(ReadDraft());
+            int sentAt = _edits;
 
             _saving = true;
             UpdateCommitButtons(draftIsValid: true);
@@ -1105,15 +1125,21 @@ namespace MouseJiggler.App
                         return;
                     }
 
-                    _dirty = false;
+                    // Only if the draft is still the one that was sent. Anything typed during
+                    // the write is uncommitted, and saying otherwise loses it.
+                    _dirty = _edits != sentAt;
 
-                    if (closeOnSuccess)
+                    if (closeOnSuccess && !_dirty)
                     {
                         Close();
                         return;
                     }
 
-                    _externalChangeNote.Visible = false;
+                    if (!_dirty)
+                    {
+                        _externalChangeNote.Visible = false;
+                    }
+
                     return;
                 }
 

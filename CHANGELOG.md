@@ -17,9 +17,12 @@ been executed is listed row by row in
 ### Changed
 
 - `Alt+A` in the Settings window now applies settings. It previously moved focus to the
-  inactivity interval field, which has moved to `Alt+T`. Nothing else about that field
-  changed. Apply is a command and `Alt+A` is where a Windows user reaches for it, and
-  the alternative was a shortcut that collided whenever the About section was open.
+  inactivity interval field, which has moved to `Alt+T`. Apply is a command and `Alt+A` is
+  where a Windows user reaches for it, and the alternative was a shortcut that collided
+  whenever the About section was open.
+- The status button in the Settings window answers to `Alt+S` in both of its states. It was
+  `Alt+S` while it read Start and `Alt+T` while it read Stop, and `Alt+T` now belongs to the
+  interval field. One button that is never both things at once needs only one shortcut.
 
 ### Added
 

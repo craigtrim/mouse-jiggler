@@ -91,28 +91,13 @@ jobs:
 
           # -RequireInstaller: a release missing its installer must fail here, not
           # look successful and be discovered by whoever downloads it.
+          #
+          # This writes the artifact manifest as well as the ZIP, the installer and
+          # SHA256SUMS.txt, and it writes the checksums last. Nothing may add to
+          # artifacts/ after this line: a file written later is a file uploaded
+          # with no published checksum, which is exactly what issue #15 was.
           ./scripts/package.ps1 -Version $version -SkipBuild -RequireInstaller
           ./scripts/verify-package.ps1 -Version $version
-
-      - name: Write the artifact manifest
-        shell: pwsh
-        run: |
-          $commit = git rev-parse HEAD
-          $sdk = dotnet --version
-
-          $rows = Get-ChildItem artifacts -File |
-            Where-Object { $_.Extension -in @('.zip', '.exe', '.txt') } |
-            ForEach-Object {
-              [pscustomobject]@{
-                name   = $_.Name
-                bytes  = $_.Length
-                sha256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-                commit = $commit
-                sdk    = $sdk
-              }
-            }
-
-          $rows | ConvertTo-Json -Depth 3 | Set-Content artifacts/artifact-manifest.json
 
       - name: Create or update the draft release
         shell: pwsh

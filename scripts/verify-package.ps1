@@ -6,7 +6,12 @@
     Run after package.ps1. This is the last gate before a release: it confirms the
     portable ZIP contains exactly what it should, that nothing which must never
     ship has crept in, that the ZIP omits installed.marker (its absence is what
-    identifies a portable copy), and that every checksum matches.
+    identifies a portable copy), that every checksum matches, and that every
+    released artifact has one.
+
+    CI runs this on every pull request over a real packaged artifacts directory,
+    which is what makes the coverage check below a statement about behaviour
+    rather than about the text of a script. See issue #15.
 #>
 [CmdletBinding()]
 param(
@@ -94,6 +99,47 @@ foreach ($line in Get-Content $sumsPath) {
         }
     }
 }
+
+# ---------------------------------------------------------------------------
+# Every released artifact carries a published checksum, and the checksums file
+# names nothing else. artifact-manifest.json used to be uploaded without one,
+# which made the README's promise wider than the release and made the release
+# gate fail on a release that was otherwise correct.
+#
+# The expected set is spelled out here rather than read back from
+# release-files.ps1. A check that asks the helper what to expect agrees with the
+# helper even when the helper is wrong, and agreement is not verification.
+# ---------------------------------------------------------------------------
+Write-Host 'Checking that every released artifact is covered' -ForegroundColor Cyan
+
+$expected = New-Object System.Collections.Generic.List[string]
+$expected.Add("MouseJiggler-$Version-windows-x64-portable.zip")
+$expected.Add('artifact-manifest.json')
+
+$setupName = "MouseJiggler-$Version-windows-x64-setup.exe"
+if (Test-Path (Join-Path $Artifacts $setupName)) {
+    $expected.Add($setupName)
+}
+else {
+    # package.ps1 without -RequireInstaller warns and produces the ZIP alone. CI and
+    # the release workflow both pass it, so no installer here means somebody
+    # packaged locally without a compiler rather than that a release lost one.
+    Write-Host '  NOTE  No installer was packaged, so none is expected in the checksums.' -ForegroundColor Yellow
+}
+
+$listed = @()
+foreach ($line in Get-Content $sumsPath) {
+    if ($line -match '^([0-9a-f]{64})\s+(.+)$') {
+        $listed += $Matches[2].Trim()
+    }
+}
+
+foreach ($name in $expected) {
+    Check (@($listed | Where-Object { $_ -eq $name }).Count -eq 1) "SHA256SUMS.txt carries exactly one checksum for $name"
+}
+
+$unlisted = @($listed | Where-Object { $_ -notin $expected })
+Check ($unlisted.Count -eq 0) "SHA256SUMS.txt names nothing beyond the released artifacts$(if ($unlisted) { ': ' + ($unlisted -join ', ') })"
 
 $exePath = Join-Path $Artifacts 'payload\MouseJiggler.exe'
 if (Test-Path $exePath) {

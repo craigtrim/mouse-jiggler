@@ -44,8 +44,9 @@ before running it:
 
     Get-FileHash .\MouseJiggler-1.0.0-windows-x64-setup.exe -Algorithm SHA256
 
-Compare that against `SHA256SUMS.txt` on the release page. Do not disable SmartScreen, your
-antivirus, or any other protection to make this app run.
+Compare that against `SHA256SUMS.txt` on the release page, which carries a line for every
+file published beside it. Do not disable SmartScreen, your antivirus, or any other
+protection to make this app run.
 
 ## Upgrading
 

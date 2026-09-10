@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>MouseJiggler.App</RootNamespace>
+    <AssemblyName>MouseJiggler</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Generated from the drawn artwork by scripts/build-icon.ps1 and verified by IconTests. -->
+    <ApplicationIcon>..\..\assets\MouseJiggler.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MouseJiggler.Core\MouseJiggler.Core.csproj" />
+    <ProjectReference Include="..\MouseJiggler.Windows\MouseJiggler.Windows.csproj" />
+  </ItemGroup>
+
+  <!-- The command line is the contract the installer depends on, so the tests exercise
+       the parser directly rather than through the process. -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>MouseJiggler.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <!-- The MIT licence ships beside the executable. -->
+  <ItemGroup>
+    <None Include="..\..\LICENSE" Link="LICENSE" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

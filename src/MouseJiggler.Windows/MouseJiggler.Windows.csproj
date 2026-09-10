@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <RootNamespace>MouseJiggler.Windows</RootNamespace>
+    <AssemblyName>MouseJiggler.Windows</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MouseJiggler.Core\MouseJiggler.Core.csproj" />
+  </ItemGroup>
+
+  <!-- Win32 adapters and file storage. No Windows Forms UI here. -->
+  <ItemGroup>
+    <Reference Include="System.Runtime.Serialization" />
+  </ItemGroup>
+
+  <!-- The tests assert native structure sizes, which needs the interop types. -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>MouseJiggler.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+</Project>

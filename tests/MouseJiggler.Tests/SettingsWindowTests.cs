@@ -163,9 +163,28 @@ namespace MouseJiggler.Tests
                     LayoutSettler.Settle(form);
 
                     Assert.True(IsEffectivelyVisible(Find<Label>(form, "Version and licence")));
-                    Assert.True(
-                        form.ClientSize.Height > closedHeight,
-                        "The window did not grow, so the details are behind a scrollbar or off the bottom.");
+
+                    // Growing is the point, but the window is clamped to the working area and
+                    // cannot grow past it. A short screen, which is what a hosted build agent
+                    // usually has, leaves the closed window already at that ceiling with
+                    // nowhere to expand into. The window is not misbehaving there, and
+                    // demanding growth it is not allowed to have reports the screen size as a
+                    // defect. SizeToContent says what happens instead: AutoScroll covers what
+                    // does not fit, so that is what gets asserted when there is no room.
+                    int ceiling = Screen.FromControl(form).WorkingArea.Height;
+
+                    if (form.Height < ceiling)
+                    {
+                        Assert.True(
+                            form.ClientSize.Height > closedHeight,
+                            "The window did not grow, so the details are behind a scrollbar or off the bottom.");
+                    }
+                    else
+                    {
+                        Assert.True(
+                            form.AutoScroll,
+                            "The window is at the height of the screen and cannot scroll, so the details are unreachable.");
+                    }
 
                     // And closing it again gives the space back rather than leaving a gap.
                     expander.Checked = false;

@@ -82,11 +82,13 @@ namespace MouseJiggler.Tests
         private static SettingsV1 Settings(
             bool scheduleEnabled = false,
             int dayMask = SettingsV1.AllDaysMask,
-            bool stopped = true)
+            bool stopped = true,
+            long revision = 1,
+            bool keepDisplayOn = true)
         {
             return new SettingsV1(
                 schemaVersion: 1,
-                revision: 1,
+                revision: revision,
                 stopped: stopped,
                 runMode: RunMode.Scheduled,
                 scheduleEnabled: scheduleEnabled,
@@ -94,7 +96,7 @@ namespace MouseJiggler.Tests
                 scheduleEnd: "17:00",
                 dayMask: dayMask,
                 pauseOnBattery: true,
-                keepDisplayOn: true,
+                keepDisplayOn: keepDisplayOn,
                 jiggleMouse: true,
                 intervalSeconds: 30,
                 diagnosticLogging: false,
@@ -639,6 +641,43 @@ namespace MouseJiggler.Tests
                     LayoutSettler.Settle(form);
 
                     Assert.True(IsEffectivelyVisible(note));
+                }
+                finally
+                {
+                    form.Hide();
+                }
+            });
+        }
+
+        [Fact]
+        public void AResetThatRestartsRevisionsDoesNotDeafenTheWindow()
+        {
+            // Resetting settings writes fresh defaults, and defaults start again at revision 1.
+            // A window that had committed revision 2 would then meet revision 2 a second time,
+            // from a different session and a different document, and could mistake it for its
+            // own echo. It would sit on stale values and overwrite that session on the next
+            // Save.
+            OnFormThread(Settings(revision: 2), (form, store) =>
+            {
+                ShowOffScreen(form);
+
+                try
+                {
+                    Find<CheckBox>(form, "Pause on battery").Checked = false;
+                    Find<Button>(form, "Apply settings").PerformClick();
+                    LayoutSettler.Settle(form);
+
+                    // The reset. Lower than what this window committed, and genuinely not ours.
+                    store.RaiseExternalChange(Settings(revision: 1));
+                    LayoutSettler.Settle(form);
+
+                    // Another session, arriving at revision 2 by its own route.
+                    store.RaiseExternalChange(Settings(revision: 2, keepDisplayOn: false));
+                    LayoutSettler.Settle(form);
+
+                    Assert.False(
+                        Find<CheckBox>(form, "Keep display on").Checked,
+                        "The window ignored another session's settings because it once wrote a commit with the same revision number.");
                 }
                 finally
                 {

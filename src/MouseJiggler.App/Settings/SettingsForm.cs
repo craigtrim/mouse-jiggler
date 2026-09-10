@@ -796,6 +796,14 @@ namespace MouseJiggler.App
 
             _loading = false;
             _dirty = false;
+
+            // Nothing has been committed from this window since it started showing what is on
+            // disk, so nothing arriving next is its own echo. Forgetting here is what keeps a
+            // reset from deafening the window: a reset restarts revisions at 1, and a later
+            // session reaching 2 again would otherwise be mistaken for the 2 this window once
+            // wrote. Real revisions start at 1, so 0 is nobody's.
+            _committedRevision = 0;
+
             _externalChangeNote.Visible = false;
 
             UpdateScheduleEnabledState();

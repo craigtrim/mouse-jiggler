@@ -164,16 +164,19 @@ namespace MouseJiggler.Tests
 
                     Assert.True(IsEffectivelyVisible(Find<Label>(form, "Version and licence")));
 
-                    // Growing is the point, but the window is clamped to the working area and
-                    // cannot grow past it. A short screen, which is what a hosted build agent
-                    // usually has, leaves the closed window already at that ceiling with
-                    // nowhere to expand into. The window is not misbehaving there, and
-                    // demanding growth it is not allowed to have reports the screen size as a
-                    // defect. SizeToContent says what happens instead: AutoScroll covers what
-                    // does not fit, so that is what gets asserted when there is no room.
-                    int ceiling = Screen.FromControl(form).WorkingArea.Height;
+                    // Growing is the point, but SizeToContent caps the client height at 90% of
+                    // the primary screen's working area, and a window already at that cap has
+                    // nowhere to expand into. A hosted build agent's screen is short enough to
+                    // put it there, and demanding growth it is not allowed to have reports the
+                    // agent's screen size as a defect. SizeToContent says what happens instead:
+                    // AutoScroll covers what does not fit.
+                    //
+                    // The closed height is what gets compared, not the height after expanding.
+                    // Comparing the result would pass judgement on the very thing being
+                    // measured, and would excuse a genuine failure to grow.
+                    int cap = (int)(Screen.PrimaryScreen.WorkingArea.Height * 0.9);
 
-                    if (form.Height < ceiling)
+                    if (closedHeight < cap)
                     {
                         Assert.True(
                             form.ClientSize.Height > closedHeight,

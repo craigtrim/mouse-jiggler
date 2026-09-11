@@ -114,9 +114,12 @@ namespace MouseJiggler.App
                 if (shape == Shape.Running)
                 {
                     // Dancing: leaning into the step, with the motion coming off both sides.
-                    // The mouse shrinks to make room for the arcs. Drawn at full width they
-                    // collided with the body and the whole thing read as one blob.
-                    DrawMouse(graphics, size, brush, tiltDegrees: -13f, scale: 0.78f);
+                    // Drawn at the same scale as every other state, from issue #21, so the
+                    // mouse does not appear to shrink the moment the app starts running. The
+                    // lean costs nothing in height, because rotating about the base swings the
+                    // dome inward by as much as it swings the base out, and the strokes still
+                    // clear the body by about two pixels at sixteen.
+                    DrawMouse(graphics, size, brush, tiltDegrees: -13f, scale: 1f);
                     DrawMotionArcs(graphics, size, colour);
                     return;
                 }

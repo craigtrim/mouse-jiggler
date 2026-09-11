@@ -22,6 +22,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# One definition of which files in artifacts/ are released, shared with
+# package.ps1 so the two cannot drift apart again. See issue #15.
+. (Join-Path $PSScriptRoot 'release-files.ps1')
+
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $Artifacts = Join-Path $RepoRoot 'artifacts'
 $Output = Join-Path $RepoRoot "src/MouseJiggler.App/bin/$Configuration/net48"
@@ -62,7 +66,7 @@ if (Test-Path $sums) {
         }
     }
 
-    $released = @(Get-ChildItem $Artifacts -File | Where-Object { $_.Name -ne 'SHA256SUMS.txt' -and $_.Name -ne 'installed.marker' })
+    $released = @(Get-ReleaseArtifact -ArtifactRoot $Artifacts)
 
     foreach ($file in $released) {
         if (-not $listed.ContainsKey($file.Name)) {

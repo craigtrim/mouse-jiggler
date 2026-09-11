@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-    Builds the release artifacts: the portable ZIP, the installer, and SHA256SUMS.
+    Builds the release artifacts: the portable ZIP, the installer, the artifact
+    manifest, and SHA256SUMS.txt covering all of them.
 
 .DESCRIPTION
     Everything shipped is named explicitly in $PayloadFiles. An allowlist rather
@@ -29,6 +30,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# One definition of which files in artifacts/ are released, shared with
+# verify-release.ps1 so the two cannot drift apart again. See issue #15.
+. (Join-Path $PSScriptRoot 'release-files.ps1')
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $BuildOutput = Join-Path $RepoRoot 'src\MouseJiggler.App\bin' | Join-Path -ChildPath $Configuration | Join-Path -ChildPath 'net48'
@@ -121,11 +126,45 @@ else {
     Write-Warning "Inno Setup $innoVersion was not found, so no installer was built. The portable ZIP is still complete."
 }
 
+Write-Step 'Writing the artifact manifest'
+
+# The manifest used to be written by the release workflow, after this script had
+# already produced SHA256SUMS.txt. That ordering left the manifest as the one
+# uploaded file with no published checksum. Writing it here, before the checksums,
+# is what lets SHA256SUMS.txt cover it. See issue #15.
+$commit = & git -C $RepoRoot rev-parse HEAD
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($commit)) {
+    throw 'The source commit could not be read. The manifest records provenance, so a package without it is not a package.'
+}
+
+$sdk = & dotnet --version
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($sdk)) {
+    throw 'The build SDK version could not be read.'
+}
+
+$manifestRows = Get-ReleaseArtifact -ArtifactRoot $Artifacts |
+    ForEach-Object {
+        [pscustomobject]@{
+            name   = $_.Name
+            bytes  = $_.Length
+            sha256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            commit = $commit.Trim()
+            sdk    = $sdk.Trim()
+        }
+    }
+
+# -InputObject rather than the pipeline: piping unrolls a single-element array, and
+# Windows PowerShell then writes a bare object where every reader expects a list.
+$manifestJson = ConvertTo-Json -InputObject @($manifestRows) -Depth 3
+Set-Content -Path (Join-Path $Artifacts 'artifact-manifest.json') -Value $manifestJson -Encoding ascii
+
 Write-Step 'Writing SHA256SUMS.txt'
+
+# Last, and nothing may write into artifacts/ after it. Every file the helper
+# returns is uploaded, so every file the helper returns gets a line here, the
+# manifest included.
 $sumsPath = Join-Path $Artifacts 'SHA256SUMS.txt'
-$lines = Get-ChildItem $Artifacts -File |
-    Where-Object { $_.Extension -in @('.zip', '.exe') } |
-    Sort-Object Name |
+$lines = Get-ReleaseArtifact -ArtifactRoot $Artifacts |
     ForEach-Object {
         $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
         "$hash  $($_.Name)"

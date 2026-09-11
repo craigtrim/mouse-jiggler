@@ -6,10 +6,14 @@
 | --- | --- |
 | `MouseJiggler-<version>-windows-x64-setup.exe` | Per-user installer |
 | `MouseJiggler-<version>-windows-x64-portable.zip` | Portable application |
-| `SHA256SUMS.txt` | Checksums for the two artifacts above |
+| `SHA256SUMS.txt` | A checksum for every other file above |
 | `artifact-manifest.json` | Filename, size, checksum, source commit and build SDK |
 
 Artifacts are unsigned. Verify the checksum before running the installer.
+
+Every file on the release page has a line in `SHA256SUMS.txt`, the manifest included.
+The checksums file itself is the one exception, because a checksums file cannot
+record its own checksum.
 
 ## How a release is made
 
@@ -33,8 +37,9 @@ green run on a build agent mean the same thing.
 | `scripts/build.ps1` | Restores with the lock enforced, builds Release, checks the shipped payload against the allowlist |
 | `scripts/test.ps1` | Runs the suite. `-LiveInput` enables the tests that move the real pointer; `-Repeat` runs it several times, which is how the named pipe and mutex tests earn their keep |
 | `scripts/install-inno.ps1` | Fetches the pinned Inno Setup from its upstream release, checking the recorded size, SHA-256 and publisher signature before running any of it |
-| `scripts/package.ps1` | Builds the portable ZIP, the installer and `SHA256SUMS.txt`. `-RequireInstaller` turns a missing compiler from a warning into a failure, which is what CI and the release workflow use |
-| `scripts/verify-package.ps1` | Checks what is inside the artifacts |
+| `scripts/package.ps1` | Builds the portable ZIP, the installer, `artifact-manifest.json` and `SHA256SUMS.txt`, in that order, so the checksums cover the manifest. Nothing may write into `artifacts/` after it. `-RequireInstaller` turns a missing compiler from a warning into a failure, which is what CI and the release workflow use |
+| `scripts/verify-package.ps1` | Checks what is inside the artifacts, and that every released artifact carries exactly one checksum |
+| `scripts/release-files.ps1` | The one definition of which files in `artifacts/` are released, dot-sourced by `package.ps1` and `verify-release.ps1` so the two cannot disagree |
 | `scripts/verify-release.ps1` | Checks the release around them: checksums, version stamp, icon, reproducibility, tag and clean tree |
 | `scripts/verify-acceptance.ps1` | Runs the issue #14 rows this kind of machine can answer: one engine per session across both distributions, a damaged config file, no sockets at runtime, and a Windows-disabled startup entry surviving an upgrade |
 | `scripts/verify-lifecycle.ps1` | Runs a portable copy, installs over it, upgrades over a running copy, uninstalls, and checks that unrelated registry values and files survive |

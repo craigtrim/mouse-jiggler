@@ -98,8 +98,6 @@ namespace MouseJiggler.Windows.Process
         private Mutex? _mutex;
         private bool _ownsMutex;
         private Task? _listener;
-        private readonly object _securityGate = new object();
-        private bool _securityEstablished;
         private bool _disposed;
         private int _activeListeners;
         private int _listenerFailures;
@@ -193,100 +191,103 @@ namespace MouseJiggler.Windows.Process
         /// </remarks>
         private async Task ListenLoopAsync(CancellationToken cancellationToken)
         {
-            Interlocked.Increment(ref _activeListeners);
+            int consecutiveFailures = 0;
 
-            try
+            while (!cancellationToken.IsCancellationRequested)
             {
-                int consecutiveFailures = 0;
+                NamedPipeServerStream? server = null;
+                bool counted = false;
 
-                while (!cancellationToken.IsCancellationRequested)
+                try
                 {
-                    NamedPipeServerStream? server = null;
+                    server = CreateServer();
 
-                    try
+                    // Counted only once the server exists. Counting on entry would report a
+                    // listener that is still being built, or one asleep between failed
+                    // rebuilds, as accepting.
+                    Interlocked.Increment(ref _activeListeners);
+                    counted = true;
+
+                    while (!cancellationToken.IsCancellationRequested)
                     {
-                        server = CreateServer();
-
-                        while (!cancellationToken.IsCancellationRequested)
+                        try
                         {
-                            try
-                            {
-                                await server.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
+                            await server.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
 
-                                string request = ReadRequest(server);
-                                string response = Dispatch(request);
+                            string request = ReadRequest(server);
+                            string response = Dispatch(request);
 
-                                byte[] payload = Encoding.UTF8.GetBytes(response);
-                                server.Write(payload, 0, payload.Length);
-                                server.Flush();
+                            byte[] payload = Encoding.UTF8.GetBytes(response);
+                            server.Write(payload, 0, payload.Length);
+                            server.Flush();
 
-                                // Wait for the client to read it. Disconnecting straight after
-                                // Flush can tear the connection down with the response still
-                                // buffered, and the caller then sees a broken pipe instead of
-                                // an answer.
-                                server.WaitForPipeDrain();
+                            // Wait for the client to read it. Disconnecting straight after
+                            // Flush can tear the connection down with the response still
+                            // buffered, and the caller then sees a broken pipe instead of
+                            // an answer.
+                            server.WaitForPipeDrain();
 
-                                // A whole exchange completed, so the budget is whole again.
-                                // Resetting on a successful rebuild instead would let a fault
-                                // that returns the moment the pipe is remade retry forever.
-                                consecutiveFailures = 0;
-                            }
-                            catch (OperationCanceledException)
+                            // A whole exchange completed, so the budget is whole again.
+                            // Resetting on a successful rebuild instead would let a fault
+                            // that returns the moment the pipe is remade retry forever.
+                            consecutiveFailures = 0;
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            return;
+                        }
+                        catch (IOException)
+                        {
+                            // A client that went away mid-exchange. Keep serving.
+                        }
+                        finally
+                        {
+                            if (server.IsConnected)
                             {
-                                return;
-                            }
-                            catch (IOException)
-                            {
-                                // A client that went away mid-exchange. Keep serving.
-                            }
-                            finally
-                            {
-                                if (server.IsConnected)
-                                {
-                                    server.Disconnect();
-                                }
+                                server.Disconnect();
                             }
                         }
+                    }
 
-                        return;
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        return;
-                    }
-                    catch (Exception ex)
-                    {
+                    return;
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+                catch (Exception ex)
+                {
                         // This listener is finished, but the pool is not. Rebuilding is what
                         // keeps a passing fault from costing a listener for the life of the
                         // process, which is what issue #22 was: three of four gone before a
                         // single client had connected, and one overwritten string to show for
                         // it.
-                        consecutiveFailures++;
-                        RecordListenerFailure(ex);
+                    consecutiveFailures++;
+                    RecordListenerFailure(ex);
 
-                        if (consecutiveFailures >= MaxConsecutiveListenerFailures)
-                        {
-                            return;
-                        }
-                    }
-                    finally
-                    {
-                        server?.Dispose();
-                    }
-
-                    try
-                    {
-                        await Task.Delay(ListenerRetryDelayMilliseconds, cancellationToken).ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException)
+                    if (consecutiveFailures >= MaxConsecutiveListenerFailures)
                     {
                         return;
                     }
                 }
-            }
-            finally
-            {
-                Interlocked.Decrement(ref _activeListeners);
+                finally
+                {
+                    if (counted)
+                    {
+                        Interlocked.Decrement(ref _activeListeners);
+                    }
+
+                    server?.Dispose();
+                }
+
+                try
+                {
+                    await Task.Delay(ListenerRetryDelayMilliseconds, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
             }
         }
 
@@ -315,35 +316,23 @@ namespace MouseJiggler.Windows.Process
         public int ListenerFailureCount => Volatile.Read(ref _listenerFailures);
 
         /// <summary>
-        /// Creates one server instance.
+        /// Creates one server instance, always with this pipe's own access rules.
         /// </summary>
         /// <remarks>
-        /// Only the first instance of a named pipe may carry a security descriptor. Passing one
-        /// again when a further instance is created fails with access denied, which would kill
-        /// the accept loop and leave the app unreachable after its very first request. Later
-        /// instances inherit the ACL the first one established, so they are created without.
+        /// Every instance carries the descriptor, including the ones built later. An earlier
+        /// version handed it to the first instance only, on the reasoning that a further
+        /// instance carrying one is refused. That refusal was really the missing
+        /// CreateNewInstance right, and with the right granted the descriptor can be passed
+        /// every time.
+        ///
+        /// Passing it every time is what makes rebuilding safe. A listener that recreates its
+        /// server after the last handle has closed is creating the pipe again, not joining an
+        /// existing one, and a creation without a descriptor takes the default: readable by
+        /// Everyone, including anonymous. The pipe would quietly widen at the exact moment it
+        /// was recovering. See issue #22.
         /// </remarks>
         private NamedPipeServerStream CreateServer()
         {
-            bool firstInstance;
-            lock (_securityGate)
-            {
-                firstInstance = !_securityEstablished;
-                _securityEstablished = true;
-            }
-
-            if (!firstInstance)
-            {
-                return new NamedPipeServerStream(
-                    _pipeName,
-                    PipeDirection.InOut,
-                    NamedPipeServerStream.MaxAllowedServerInstances,
-                    PipeTransmissionMode.Byte,
-                    PipeOptions.Asynchronous,
-                    inBufferSize: IpcCommands.MaxRequestBytes,
-                    outBufferSize: IpcCommands.MaxRequestBytes);
-            }
-
             // Only this user and SYSTEM. Impersonation is refused so a client cannot borrow
             // this process's identity.
             var security = new PipeSecurity();
@@ -437,6 +426,55 @@ namespace MouseJiggler.Windows.Process
         public string? SendRequest(string command, TimeSpan timeout)
         {
             return Exchange(command, timeout)?.Response;
+        }
+
+        /// <summary>
+        /// Sends a command and refuses the answer unless this executable is what answered it.
+        /// </summary>
+        /// <remarks>
+        /// Verifying ownership and then sending the command are two connections, and a check on
+        /// the first says nothing about who answers the second. The gap between them is exactly
+        /// long enough for another server to be the one that replies, and the reply an installer
+        /// acts on is the one that says the application has closed.
+        ///
+        /// The identity is therefore taken from the connection that carried the command, not
+        /// from an earlier one. The kernel is asked which process is on the other end of this
+        /// pipe, and the answer is refused unless that process is running this same executable.
+        /// See issue #22.
+        /// </remarks>
+        public OperationResult<string> SendVerifiedRequest(string command, TimeSpan timeout)
+        {
+            PipeExchange? exchange = Exchange(command, timeout);
+
+            if (exchange == null)
+            {
+                return OperationResult<string>.Failure(FaultSubsystem.ShellOrIpc, "ipc.noAnswer");
+            }
+
+            if (!exchange.ServerProcessKnown)
+            {
+                return OperationResult<string>.Failure(
+                    FaultSubsystem.ShellOrIpc,
+                    "ipc.identityUnverifiable",
+                    exchange.ServerProcessError,
+                    retryable: false);
+            }
+
+            string? actualPath = ProcessPathResolver(exchange.ServerProcessId);
+
+            if (string.IsNullOrEmpty(actualPath))
+            {
+                return OperationResult<string>.Failure(
+                    FaultSubsystem.ShellOrIpc, "ipc.identityUnverifiable", retryable: false);
+            }
+
+            if (!IsSameExecutable(actualPath!))
+            {
+                return OperationResult<string>.Failure(
+                    FaultSubsystem.ShellOrIpc, "ipc.identityMismatch", retryable: false);
+            }
+
+            return OperationResult<string>.Success(exchange.Response);
         }
 
         /// <summary>

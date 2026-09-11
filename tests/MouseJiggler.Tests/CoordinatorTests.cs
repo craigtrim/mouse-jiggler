@@ -627,5 +627,73 @@ namespace MouseJiggler.Tests
 
             Assert.Equal(applies, harness.ExecutionState.ApplyCalls);
         }
+
+        /// <summary>
+        /// A settings document read from disk, at a chosen revision. See issue #20.
+        /// </summary>
+        private static SettingsV1 Document(long revision, bool keepDisplayOn)
+        {
+            return new SettingsV1(
+                schemaVersion: 1,
+                revision: revision,
+                stopped: false,
+                runMode: RunMode.Manual,
+                scheduleEnabled: false,
+                scheduleStart: "08:00",
+                scheduleEnd: "17:00",
+                dayMask: SettingsV1.AllDaysMask,
+                pauseOnBattery: true,
+                keepDisplayOn: keepDisplayOn,
+                jiggleMouse: true,
+                intervalSeconds: IntervalSeconds,
+                diagnosticLogging: false,
+                startupInitialized: true,
+                firstRunCompleted: true);
+        }
+
+        [Fact]
+        public void AnObservationThatArrivesAfterSomethingNewerIsIgnored()
+        {
+            // The watcher reads the file on its own thread and the result is handed to the
+            // owner thread, so an observation can arrive after a reset or a local commit has
+            // already replaced what was read. Applying it would put the app back on a document
+            // that no longer exists on disk, and the next save would write it over whatever
+            // did replace it. See issue #20.
+            using (var harness = new Harness())
+            {
+                harness.Store.RaiseExternalChange(Document(revision: 2, keepDisplayOn: false));
+                Assert.False(harness.Coordinator.Settings.KeepDisplayOn);
+
+                // A reset restarts numbering, and the store now holds revision 1.
+                harness.Store.RaiseExternalChange(Document(revision: 1, keepDisplayOn: true));
+                Assert.True(harness.Coordinator.Settings.KeepDisplayOn);
+                Assert.Equal(1, harness.Coordinator.Settings.Revision);
+
+                // Now the delayed read of the pre-reset file finally lands. It describes a
+                // document the store no longer holds.
+                harness.Store.RaiseSupersededExternalChange(Document(revision: 2, keepDisplayOn: false));
+
+                Assert.True(
+                    harness.Coordinator.Settings.KeepDisplayOn,
+                    "A superseded observation was applied, so the app is running on settings that were already replaced.");
+                Assert.Equal(1, harness.Coordinator.Settings.Revision);
+            }
+        }
+
+        [Fact]
+        public void AnObservationThatStillMatchesTheStoreIsApplied()
+        {
+            // The guard above must not deafen the watcher: an observation that still describes
+            // what is on disk is exactly what this channel is for.
+            using (var harness = new Harness())
+            {
+                Assert.True(harness.Coordinator.Settings.KeepDisplayOn);
+
+                harness.Store.RaiseExternalChange(Document(revision: 2, keepDisplayOn: false));
+
+                Assert.False(harness.Coordinator.Settings.KeepDisplayOn);
+                Assert.Equal(2, harness.Coordinator.Settings.Revision);
+            }
+        }
     }
 }

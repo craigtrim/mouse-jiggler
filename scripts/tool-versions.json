@@ -8,7 +8,7 @@
     "note": "Hash and Authenticode signature verified against the upstream GitHub release. Verify both again before use; the download page at https://jrsoftware.org/isdl.php redirects here."
   },
   "dotnetSdk": {
-    "version": "8.0.130",
+    "version": "8.0.131",
     "note": "Pinned in global.json with rollForward disabled."
   }
 }

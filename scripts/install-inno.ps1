@@ -45,6 +45,12 @@ function Get-InstalledInnoVersion {
 
         foreach ($key in Get-ChildItem $root -ErrorAction SilentlyContinue) {
             $entry = Get-ItemProperty $key.PSPath -ErrorAction SilentlyContinue
+
+            # A key with no values, or one this account cannot read, yields nothing at all.
+            # Reaching into that under Set-StrictMode throws rather than skipping, which is how
+            # a build agent with one unreadable uninstall entry failed the whole release step.
+            if ($null -eq $entry) { continue }
+
             if ($entry.PSObject.Properties.Name -notcontains 'DisplayName') { continue }
             if ($entry.DisplayName -notlike 'Inno Setup version*') { continue }
 

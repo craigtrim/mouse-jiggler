@@ -91,41 +91,258 @@ namespace MouseJiggler.App
         /// Draws one shape at the given size. Internal so the .ico writer renders each entry at
         /// its own resolution rather than resampling a single large bitmap down.
         /// </summary>
+        /// <remarks>
+        /// Every state draws the same mouse. What changes is what the mouse is doing, so the
+        /// icon says which application it belongs to before it says what that application is
+        /// currently up to. A plain grey square said neither.
+        ///
+        /// The state is carried by silhouette rather than by colour alone: the mouse leans and
+        /// throws off motion arcs while running, and wears a distinct badge while waiting or
+        /// after a failure. That is what keeps it readable in a high-contrast theme and for
+        /// anyone who cannot separate the hues.
+        ///
+        /// Everything is expressed as a fraction of the icon size and drawn at the requested
+        /// resolution, so 16 pixels is drawn as 16 pixels rather than resampled down from
+        /// something larger, which is where small icons usually turn to mush.
+        /// </remarks>
         internal static void Draw(Graphics graphics, Shape shape, int size)
         {
-            float inset = size * 0.18f;
-            float extent = size - (inset * 2);
             Color colour = ColourFor(shape);
 
             using (var brush = new SolidBrush(colour))
-            using (var pen = new Pen(colour, Math.Max(1f, size * 0.12f)))
             {
-                switch (shape)
+                if (shape == Shape.Running)
                 {
-                    case Shape.Stopped:
-                        graphics.FillRectangle(brush, inset, inset, extent, extent);
-                        break;
-
-                    case Shape.Running:
-                        graphics.FillPolygon(brush, new[]
-                        {
-                            new PointF(inset, inset),
-                            new PointF(size - inset, size / 2f),
-                            new PointF(inset, size - inset),
-                        });
-                        break;
-
-                    case Shape.Waiting:
-                        graphics.DrawEllipse(pen, inset, inset, extent, extent);
-                        graphics.DrawLine(pen, size / 2f, size / 2f, size / 2f, inset + (extent * 0.2f));
-                        graphics.DrawLine(pen, size / 2f, size / 2f, size - inset - (extent * 0.25f), size / 2f);
-                        break;
-
-                    case Shape.Error:
-                        graphics.FillRectangle(brush, (size / 2f) - (size * 0.08f), inset, size * 0.16f, extent * 0.6f);
-                        graphics.FillEllipse(brush, (size / 2f) - (size * 0.09f), size - inset - (size * 0.18f), size * 0.18f, size * 0.18f);
-                        break;
+                    // Dancing: leaning into the step, with the motion coming off both sides.
+                    // The mouse shrinks to make room for the arcs. Drawn at full width they
+                    // collided with the body and the whole thing read as one blob.
+                    DrawMouse(graphics, size, brush, tiltDegrees: -13f, scale: 0.78f);
+                    DrawMotionArcs(graphics, size, colour);
+                    return;
                 }
+
+                DrawMouse(graphics, size, brush, tiltDegrees: 0f, scale: 1f);
+
+                if (shape == Shape.Waiting)
+                {
+                    DrawClockBadge(graphics, size, colour);
+                }
+                else if (shape == Shape.Error)
+                {
+                    DrawAlertBadge(graphics, size, colour);
+                }
+            }
+        }
+
+        /// <summary>The mouse itself: a filled body with its buttons cut back out of it.</summary>
+        /// <remarks>
+        /// Filled rather than outlined. At sixteen pixels an outline is a one pixel ring that
+        /// disappears against a busy taskbar, while a solid shape keeps its edge. The button
+        /// split is erased from the body instead of being drawn over it, so it stays visible
+        /// whatever the icon sits on.
+        /// </remarks>
+        private static void DrawMouse(Graphics graphics, int size, Brush brush, float tiltDegrees, float scale)
+        {
+            GraphicsState saved = graphics.Save();
+
+            try
+            {
+                if (Math.Abs(scale - 1f) > 0.001f || Math.Abs(tiltDegrees) > 0.01f)
+                {
+                    // Pivot about the base, the way something standing on it would lean.
+                    graphics.TranslateTransform(size * 0.5f, size * 0.72f);
+                    graphics.RotateTransform(tiltDegrees);
+                    graphics.ScaleTransform(scale, scale);
+                    graphics.TranslateTransform(size * -0.5f, size * -0.72f);
+                }
+
+                using (GraphicsPath body = BodyPath(size))
+                {
+                    graphics.FillPath(brush, body);
+                }
+
+                // SourceCopy writes the transparent pixels straight through the body rather than
+                // blending with it, which is the only way to take a bite out of what was just
+                // filled. It costs the antialiasing on these two lines, and at these sizes a
+                // crisp split reads better than a soft one anyway.
+                CompositingMode previous = graphics.CompositingMode;
+                graphics.CompositingMode = CompositingMode.SourceCopy;
+
+                try
+                {
+                    using (var cut = new SolidBrush(Color.Transparent))
+                    {
+                        float gap = Math.Max(1f, size * 0.055f);
+                        float split = size * 0.44f;
+
+                        // Across, separating the buttons from the body.
+                        graphics.FillRectangle(cut, size * 0.24f, split - (gap / 2f), size * 0.52f, gap);
+
+                        // Down, separating left button from right.
+                        graphics.FillRectangle(cut, (size * 0.5f) - (gap / 2f), size * 0.10f, gap, split - (size * 0.10f));
+                    }
+                }
+                finally
+                {
+                    graphics.CompositingMode = previous;
+                }
+            }
+            finally
+            {
+                graphics.Restore(saved);
+            }
+        }
+
+        /// <summary>The mouse outline: a tall dome over a rounded base.</summary>
+        private static GraphicsPath BodyPath(int size)
+        {
+            float left = size * 0.27f;
+            float right = size * 0.73f;
+            float top = size * 0.11f;
+            float bottom = size * 0.91f;
+            float width = right - left;
+
+            float topRadius = width;
+            float bottomRadius = width * 0.7f;
+
+            var path = new GraphicsPath();
+
+            // The dome is a full half circle, so the top is as round as a mouse actually is.
+            path.AddArc(left, top, width, topRadius, 180f, 180f);
+            path.AddArc(left, bottom - bottomRadius, width, bottomRadius, 0f, 180f);
+            path.CloseFigure();
+
+            return path;
+        }
+
+        /// <summary>Motion coming off both sides, which is what makes it read as moving.</summary>
+        /// <remarks>
+        /// Straight strokes, not arcs. An arc short enough to fit beside a sixteen pixel mouse
+        /// is only three or four pixels of curve, which renders as a vertical dash and reads as
+        /// a tally mark rather than as movement. A straight stroke at an angle survives the same
+        /// space because its direction is carried by two endpoints instead of by curvature.
+        ///
+        /// One a side, and symmetric, because the mouse is shaking in place rather than
+        /// travelling. Trailing marks on one side only would say it had gone somewhere.
+        /// </remarks>
+        private static void DrawMotionArcs(Graphics graphics, int size, Color colour)
+        {
+            using (var pen = new Pen(colour, Math.Max(1.5f, size * 0.085f)))
+            {
+                pen.StartCap = LineCap.Round;
+                pen.EndCap = LineCap.Round;
+
+                // Beside the body rather than beside the dome, and far enough out that the
+                // round caps still leave daylight at sixteen pixels. Touching the body at all
+                // turns them into limbs and the mouse into an insect.
+                graphics.DrawLine(pen, size * 0.04f, size * 0.58f, size * 0.15f, size * 0.49f);
+                graphics.DrawLine(pen, size * 0.96f, size * 0.58f, size * 0.85f, size * 0.49f);
+            }
+        }
+
+        /// <summary>A clock in the corner, for a run that is waiting on its schedule.</summary>
+        private static void DrawClockBadge(Graphics graphics, int size, Color colour)
+        {
+            RectangleF badge = BadgeBounds(size);
+            PunchBadgeMoat(graphics, size, badge);
+
+            using (var brush = new SolidBrush(colour))
+            {
+                graphics.FillEllipse(brush, badge);
+            }
+
+            CompositingMode previous = graphics.CompositingMode;
+            graphics.CompositingMode = CompositingMode.SourceCopy;
+
+            try
+            {
+                using (var cut = new Pen(Color.Transparent, Math.Max(1f, size * 0.055f)))
+                {
+                    float cx = badge.X + (badge.Width / 2f);
+                    float cy = badge.Y + (badge.Height / 2f);
+
+                    cut.StartCap = LineCap.Flat;
+                    cut.EndCap = LineCap.Flat;
+
+                    graphics.DrawLine(cut, cx, cy, cx, cy - (badge.Height * 0.30f));
+                    graphics.DrawLine(cut, cx, cy, cx + (badge.Width * 0.26f), cy);
+                }
+            }
+            finally
+            {
+                graphics.CompositingMode = previous;
+            }
+        }
+
+        /// <summary>An exclamation in the corner, for a capability that failed.</summary>
+        private static void DrawAlertBadge(Graphics graphics, int size, Color colour)
+        {
+            RectangleF badge = BadgeBounds(size);
+            PunchBadgeMoat(graphics, size, badge);
+
+            using (var brush = new SolidBrush(colour))
+            {
+                graphics.FillEllipse(brush, badge);
+            }
+
+            CompositingMode previous = graphics.CompositingMode;
+            graphics.CompositingMode = CompositingMode.SourceCopy;
+
+            try
+            {
+                using (var cut = new SolidBrush(Color.Transparent))
+                {
+                    float stem = Math.Max(1f, badge.Width * 0.18f);
+                    float x = badge.X + (badge.Width / 2f) - (stem / 2f);
+
+                    graphics.FillRectangle(cut, x, badge.Y + (badge.Height * 0.20f), stem, badge.Height * 0.32f);
+                    graphics.FillRectangle(cut, x, badge.Y + (badge.Height * 0.62f), stem, stem);
+                }
+            }
+            finally
+            {
+                graphics.CompositingMode = previous;
+            }
+        }
+
+        /// <summary>Where a state badge sits: the bottom right corner, hard against the edge.</summary>
+        private static RectangleF BadgeBounds(int size)
+        {
+            float diameter = size * 0.46f;
+            return new RectangleF(size - diameter, size - diameter, diameter, diameter);
+        }
+
+        /// <summary>
+        /// Clears a ring around the badge before it is drawn.
+        /// </summary>
+        /// <remarks>
+        /// Without this the badge and the mouse are the same colour touching each other, so they
+        /// fuse into one shape and the badge stops being a badge. The gap is what separates
+        /// them, and it has to be cut out of the body rather than drawn over it, because there
+        /// is no background colour to draw with: the icon is transparent behind.
+        /// </remarks>
+        private static void PunchBadgeMoat(Graphics graphics, int size, RectangleF badge)
+        {
+            float moat = Math.Max(1f, size * 0.07f);
+
+            CompositingMode previous = graphics.CompositingMode;
+            graphics.CompositingMode = CompositingMode.SourceCopy;
+
+            try
+            {
+                using (var cut = new SolidBrush(Color.Transparent))
+                {
+                    graphics.FillEllipse(
+                        cut,
+                        badge.X - moat,
+                        badge.Y - moat,
+                        badge.Width + (moat * 2f),
+                        badge.Height + (moat * 2f));
+                }
+            }
+            finally
+            {
+                graphics.CompositingMode = previous;
             }
         }
 

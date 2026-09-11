@@ -53,6 +53,17 @@ namespace MouseJiggler.Core.Abstractions
         /// </summary>
         Task<OperationResult<SettingsV1>> UpdateAsync(Func<SettingsV1, SettingsV1> patch, CancellationToken cancellationToken);
 
+        /// <summary>
+        /// The revision this store last read or wrote.
+        /// </summary>
+        /// <remarks>
+        /// An observation is delivered across a thread hop, so it can arrive after something
+        /// newer has replaced it. Comparing its revision against this says whether it still
+        /// describes the settings that exist, or a document that has already been superseded.
+        /// See issue #20.
+        /// </remarks>
+        long LastKnownRevision { get; }
+
         /// <summary>Raised when another writer commits a new revision. Marshalled by the App dispatcher.</summary>
         event EventHandler<SettingsV1>? ExternalChangeObserved;
     }

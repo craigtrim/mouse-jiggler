@@ -2,7 +2,7 @@
 
 ## What you need
 
-Windows, and the .NET SDK 8.0.130 that `global.json` pins with `rollForward` disabled. No
+Windows, and the .NET SDK 8.0.131 that `global.json` pins with `rollForward` disabled. No
 Visual Studio installation is required: the projects are SDK-style and build from the
 command line, and the .NET Framework reference assemblies arrive as a NuGet package rather
 than a Developer Pack.

@@ -31,6 +31,11 @@ namespace MouseJiggler.App
     /// </remarks>
     public sealed class SettingsForm : Form
     {
+        /// <summary>Large enough for the title bar and Alt+Tab at the DPI ranges supported.</summary>
+        private const int WindowIconSize = 32;
+
+        private Icon? _windowIcon;
+
         private readonly ActivityCoordinator _coordinator;
         private readonly LocalDiagnosticSink _diagnostics;
         private readonly DiagnosticRing _diagnosticRing;
@@ -111,6 +116,7 @@ namespace MouseJiggler.App
         private bool _startupRegisteredAtLoad;
 
         private readonly Button _save = new Button();
+        private readonly Button _apply = new Button();
         private readonly Button _cancel = new Button();
         private readonly ErrorProvider _errors = new ErrorProvider();
 
@@ -119,6 +125,29 @@ namespace MouseJiggler.App
 
         /// <summary>True while this window is committing its own draft, so its own change is not reported as somebody else's.</summary>
         private bool _saving;
+
+        /// <summary>
+        /// Bumped by every edit, so a commit can tell whether the draft moved under it.
+        /// </summary>
+        /// <remarks>
+        /// The write is awaited, and the user keeps typing during it. Clearing _dirty on the
+        /// way out would then throw away edits made while the file was being written: Apply
+        /// would go grey, the close prompt would stay silent, and the edits still on screen
+        /// would never be committed. Comparing the count taken before the await says whether
+        /// the draft is still the one that was sent.
+        /// </remarks>
+        private int _edits;
+
+        /// <summary>
+        /// The settings revision this window committed itself.
+        /// </summary>
+        /// <remarks>
+        /// The watcher raises this window's own commit back at it, and the _saving guard below
+        /// runs after a BeginInvoke hop, by which time the commit has already cleared the flag.
+        /// Save always closed before that queued event could land. Apply does not, so the
+        /// revision is what tells our own write apart from somebody else's. See issue #17.
+        /// </remarks>
+        private long _committedRevision;
 
         private static readonly string[] DayNames = { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" };
         public SettingsForm(ActivityCoordinator coordinator, LocalDiagnosticSink diagnostics, DiagnosticRing diagnosticRing)
@@ -135,6 +164,14 @@ namespace MouseJiggler.App
             AutoScroll = true;
             ShowInTaskbar = true;
             MaximizeBox = false;
+
+            // WinForms does not take a form's icon from <ApplicationIcon>. That setting puts the
+            // icon on the executable for the shell and nothing else, so a form that never sets
+            // Icon shows the stock .NET one in its title bar, in Alt+Tab and on the taskbar. The
+            // same artwork the tray draws is used here, so the window and the notification area
+            // agree about what this application looks like.
+            _windowIcon = TrayIconFactory.Create(TrayIconFactory.Shape.Running, WindowIconSize);
+            Icon = _windowIcon;
 
             BuildLayout();
             LoadFromSettings();
@@ -591,7 +628,9 @@ namespace MouseJiggler.App
             _interval.ValueChanged += (_, __) => MarkDirty();
 
             var intervalRow = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top };
-            intervalRow.Controls.Add(new Label { Text = "&After", AutoSize = true, Padding = new Padding(20, 6, 4, 0) });
+            // Af&ter, not &After: Alt+A belongs to the Apply button, which is a command rather
+            // than a jump to a field. See issue #17.
+            intervalRow.Controls.Add(new Label { Text = "Af&ter", AutoSize = true, Padding = new Padding(20, 6, 4, 0) });
             intervalRow.Controls.Add(_interval);
             intervalRow.Controls.Add(new Label { Text = "seconds of inactivity", AutoSize = true, Padding = new Padding(4, 6, 0, 0) });
 
@@ -682,13 +721,26 @@ namespace MouseJiggler.App
             _save.Text = "Sa&ve";
             _save.AutoSize = true;
             _save.AccessibleName = "Save settings";
-            _save.Click += async (_, __) => await SaveAsync().ConfigureAwait(true);
+            _save.AccessibleDescription = "Applies your changes and closes this window.";
+            _save.Click += async (_, __) => await CommitAsync(closeOnSuccess: true).ConfigureAwait(true);
+
+            // Apply means apply; Save means apply and exit. The two commit exactly the same
+            // things, including the startup registration, and differ only in whether the window
+            // survives it. See issue #17.
+            _apply.Text = "&Apply";
+            _apply.AutoSize = true;
+            _apply.AccessibleName = "Apply settings";
+            _apply.AccessibleDescription = "Applies your changes and leaves this window open.";
+            _apply.Enabled = false;
+            _apply.Click += async (_, __) => await CommitAsync(closeOnSuccess: false).ConfigureAwait(true);
 
             _cancel.Text = "Cancel";
             _cancel.AutoSize = true;
             _cancel.AccessibleName = "Cancel";
             _cancel.Click += (_, __) => Close();
 
+            // Enter still commits and closes. Apply is a deliberate click or Alt+A, never the
+            // thing that happens because somebody pressed Return in a text field.
             AcceptButton = _save;
             CancelButton = _cancel;
 
@@ -699,9 +751,33 @@ namespace MouseJiggler.App
                 FlowDirection = FlowDirection.RightToLeft,
             };
 
+            // Right to left, so the first control added sits furthest right. Reading order is
+            // Save, Cancel, Apply, which is where Windows puts Apply.
+            panel.Controls.Add(_apply);
             panel.Controls.Add(_cancel);
             panel.Controls.Add(_save);
             return panel;
+        }
+
+        /// <summary>
+        /// The only thing that decides whether Save and Apply can be pressed.
+        /// </summary>
+        /// <remarks>
+        /// Both buttons are computed here rather than assigned wherever something changes. The
+        /// two conditions are nearly the same and would be written down in four places
+        /// otherwise, which is how they drift apart.
+        ///
+        /// Save is enabled on a clean form: it is how a keyboard user commits and leaves, and
+        /// closing a window you have not edited is a perfectly reasonable thing to do. Apply on
+        /// a clean form would do nothing, so it is held closed until there is something to
+        /// apply.
+        /// </remarks>
+        private void UpdateCommitButtons(bool draftIsValid)
+        {
+            bool canCommit = draftIsValid && !_saving;
+
+            _save.Enabled = canCommit;
+            _apply.Enabled = canCommit && _dirty;
         }
 
         private void LoadFromSettings()
@@ -733,6 +809,14 @@ namespace MouseJiggler.App
 
             _loading = false;
             _dirty = false;
+
+            // Nothing has been committed from this window since it started showing what is on
+            // disk, so nothing arriving next is its own echo. Forgetting here is what keeps a
+            // reset from deafening the window: a reset restarts revisions at 1, and a later
+            // session reaching 2 again would otherwise be mistaken for the 2 this window once
+            // wrote. Real revisions start at 1, so 0 is nobody's.
+            _committedRevision = 0;
+
             _externalChangeNote.Visible = false;
 
             UpdateScheduleEnabledState();
@@ -790,12 +874,7 @@ namespace MouseJiggler.App
 
             if (outcome.Succeeded)
             {
-                // Never re-enable in the middle of a write; the save path owns the button then.
-                if (!_saving)
-                {
-                    _save.Enabled = true;
-                }
-
+                UpdateCommitButtons(draftIsValid: true);
                 return;
             }
 
@@ -806,7 +885,7 @@ namespace MouseJiggler.App
                 _errors.SetError(ControlFor(message.Field), message.Text);
             }
 
-            _save.Enabled = false;
+            UpdateCommitButtons(draftIsValid: false);
         }
 
         /// <summary>
@@ -831,9 +910,21 @@ namespace MouseJiggler.App
                 return;
             }
 
-            // Our own save raises this too. Reporting it as somebody else's change would be
-            // both wrong and alarming.
-            if (_saving)
+            // Our own commit raises this too, and reporting it as somebody else's change would
+            // be both wrong and alarming.
+            //
+            // _saving alone stopped being enough once Apply left the window open. This handler
+            // hops to the UI thread first, so by the time the flag is read the commit has
+            // usually finished and cleared it. Save closed the window before the queued event
+            // could land, which is why it never showed. The revision is what actually separates
+            // our write from anybody else's: the store increments it on every commit, so
+            // the revision we just wrote is our own echo coming back.
+            //
+            // Matched exactly rather than as "at or below". Resetting settings writes fresh
+            // defaults starting again at revision 1, so a window that had committed revision 5
+            // would treat every subsequent real change as old news and never refresh again.
+            // See issue #17.
+            if (_saving || settings.Revision == _committedRevision)
             {
                 return;
             }
@@ -856,6 +947,7 @@ namespace MouseJiggler.App
             }
 
             _dirty = true;
+            _edits++;
             ValidateDraft();
         }
 
@@ -910,7 +1002,9 @@ namespace MouseJiggler.App
             _detailLabel.Visible = _detailLabel.Text.Length > 0;
             _powerLabel.Text = "Power: " + DescribePower(effects);
 
-            _startStopButton.Text = settings.Stopped ? "&Start" : "S&top";
+            // &Stop, not S&top: this is one button that is never both things at once, so it
+            // keeps Alt+S in either state and leaves Alt+T to the interval field. See issue #17.
+            _startStopButton.Text = settings.Stopped ? "&Start" : "&Stop";
             _scheduleButton.Text = settings.ScheduleEnabled ? "Start on s&chedule" : "Start &continuously";
 
             // Retry appears exactly when there is something to retry.
@@ -1012,14 +1106,22 @@ namespace MouseJiggler.App
                 MessageBoxIcon.Warning);
         }
 
-        private async Task SaveAsync()
+        /// <summary>
+        /// Commits the draft. Save closes afterwards, Apply does not.
+        /// </summary>
+        /// <remarks>
+        /// One path for both buttons. Apply that committed anything less than Save would be a
+        /// button whose label was a lie, so the only difference is the closing. See issue #17.
+        /// </remarks>
+        private async Task CommitAsync(bool closeOnSuccess)
         {
             _errors.Clear();
 
             SettingsPatch patch = SettingsPresenter.ToPatch(ReadDraft());
+            int sentAt = _edits;
 
-            _save.Enabled = false;
             _saving = true;
+            UpdateCommitButtons(draftIsValid: true);
 
             try
             {
@@ -1027,16 +1129,38 @@ namespace MouseJiggler.App
 
                 if (result.Succeeded)
                 {
+                    // Recorded before the startup registration is attempted, because the file is
+                    // already written by this point and the watcher event is already on its way.
+                    if (result.Value != null)
+                    {
+                        _committedRevision = result.Value.Revision;
+                    }
+
                     // Preferences are committed. The startup registration is a change against a
                     // different store, so it is applied second and reported on its own terms
                     // rather than folded into one claim that everything succeeded.
                     if (!ApplyStartupChange())
                     {
+                        // Half committed. The draft stays dirty so Apply is still available to
+                        // retry the part that failed.
                         return;
                     }
 
-                    _dirty = false;
-                    Close();
+                    // Only if the draft is still the one that was sent. Anything typed during
+                    // the write is uncommitted, and saying otherwise loses it.
+                    _dirty = _edits != sentAt;
+
+                    if (closeOnSuccess && !_dirty)
+                    {
+                        Close();
+                        return;
+                    }
+
+                    if (!_dirty)
+                    {
+                        _externalChangeNote.Visible = false;
+                    }
+
                     return;
                 }
 
@@ -1046,7 +1170,10 @@ namespace MouseJiggler.App
             finally
             {
                 _saving = false;
-                _save.Enabled = true;
+
+                // Recomputed rather than restored: after a successful Apply the right state is
+                // Save enabled and Apply closed, and only the draft knows which case this is.
+                ValidateDraft();
             }
         }
 
@@ -1146,6 +1273,13 @@ namespace MouseJiggler.App
                 _coordinator.StateChanged -= OnStateChanged;
                 _coordinator.SettingsChanged -= OnSettingsChangedElsewhere;
                 _errors.Dispose();
+
+                // Built from a native HICON, which GDI does not reclaim on its own. The window
+                // is opened and closed repeatedly over a session, so leaking one each time
+                // walks the process towards its handle quota.
+                Icon = null;
+                _windowIcon?.Dispose();
+                _windowIcon = null;
             }
 
             base.Dispose(disposing);

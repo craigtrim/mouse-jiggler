@@ -14,6 +14,16 @@ treated as tested on Windows 11, or on a laptop, or with a screen reader. What h
 been executed is listed row by row in
 [docs/acceptance/v1.0.0.md](docs/acceptance/v1.0.0.md).
 
+### Changed
+
+- `Alt+A` in the Settings window now applies settings. It previously moved focus to the
+  inactivity interval field, which has moved to `Alt+T`. Apply is a command and `Alt+A` is
+  where a Windows user reaches for it, and the alternative was a shortcut that collided
+  whenever the About section was open.
+- The status button in the Settings window answers to `Alt+S` in both of its states. It was
+  `Alt+S` while it read Start and `Alt+T` while it read Stop, and `Alt+T` now belongs to the
+  interval field. One button that is never both things at once needs only one shortcut.
+
 ### Added
 
 - Solution skeleton, shared contracts and MIT licensing.
@@ -22,6 +32,9 @@ been executed is listed row by row in
 - Automatic power and session detection, and the Windows keep-awake request.
 - Idle-only pointer movement with multi-monitor coordinates.
 - The tray application, the Settings window, and single-instance IPC.
+- An Apply button in the Settings window, which commits exactly what Save commits and
+  leaves the window open, so the status line and the schedule preview can be seen
+  reacting without closing and reopening.
 - Per-user startup registration through the HKCU Run key.
 - Bounded local diagnostics, off by default.
 - The per-user installer, the portable ZIP and packaging verification.
@@ -91,3 +104,9 @@ because each one is a mistake worth not repeating.
   minute and sixty failures a minute produced identical output.
 - The Settings window opened at 533 logical pixels wide rather than the 540 specified, because
   the size was derived entirely from content with no floor.
+- The tray icon was a plain grey square when stopped. It said nothing about which application
+  it belonged to, which is most of what a notification area icon is for. Every state now draws
+  the same mouse and varies what the mouse is doing.
+- The Settings window showed the stock .NET icon in its title bar, in Alt+Tab and on the
+  taskbar. `<ApplicationIcon>` puts an icon on the executable for the shell and nothing else,
+  so a form that never assigns `Icon` gets the framework default.

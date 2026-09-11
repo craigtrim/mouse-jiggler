@@ -125,15 +125,23 @@ namespace MouseJiggler.App
             {
                 // Only the same executable may ask the owner to close, so an installer for one
                 // copy cannot shut down a different one.
-                int conflict = CheckOwnerIsThisExecutable(instance);
-                if (conflict != ExitCodes.Success)
+                //
+                // Verified on the connection that carries the command rather than on an earlier
+                // one. Checking ownership first and then sending the command is two exchanges,
+                // and whoever answered the first is not necessarily whoever answers the second.
+                // The reply acted on here is an installer's evidence that the app has closed.
+                // See issue #22.
+                OperationResult<string> shutdown =
+                    instance.SendVerifiedRequest(IpcCommands.ShutdownForUpdate, IpcTimeout);
+
+                if (!shutdown.Succeeded)
                 {
-                    return conflict;
+                    return string.Equals(shutdown.Outcome.Code, "ipc.noAnswer", StringComparison.Ordinal)
+                        ? ExitCodes.PersistenceFailed
+                        : ExitCodes.OwnershipConflict;
                 }
 
-                string? response = instance.SendRequest(IpcCommands.ShutdownForUpdate, IpcTimeout);
-
-                if (string.Equals(response, IpcCommands.ResponseOk, StringComparison.Ordinal))
+                if (string.Equals(shutdown.Value, IpcCommands.ResponseOk, StringComparison.Ordinal))
                 {
                     return ExitCodes.Success;
                 }

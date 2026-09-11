@@ -77,16 +77,30 @@ namespace MouseJiggler.Windows.Process
         private const int ConnectRetryDelayMilliseconds = 25;
 
         /// <summary>How many server instances accept concurrently.</summary>
-        private const int ListenerPoolSize = 4;
+        public const int ListenerPoolSize = 4;
+
+        /// <summary>
+        /// Consecutive failures one listener will absorb before it gives up.
+        /// </summary>
+        /// <remarks>
+        /// Rebuilding costs nothing when the fault was a passing one, and a listener that
+        /// vanishes costs availability until the process restarts. A fault that returns the
+        /// instant the pipe is rebuilt is not passing, so the budget is small and the listener
+        /// stops rather than spinning on it. See issue #22.
+        /// </remarks>
+        private const int MaxConsecutiveListenerFailures = 5;
+
+        /// <summary>How long a listener waits before rebuilding after a failure.</summary>
+        private const int ListenerRetryDelayMilliseconds = 250;
 
         private readonly CancellationTokenSource _cancellation = new CancellationTokenSource();
 
         private Mutex? _mutex;
         private bool _ownsMutex;
         private Task? _listener;
-        private readonly object _securityGate = new object();
-        private bool _securityEstablished;
         private bool _disposed;
+        private int _activeListeners;
+        private int _listenerFailures;
 
         public SingleInstanceService(string userSid, int sessionId, string executablePath, string? nameSuffix = null)
         {
@@ -177,99 +191,148 @@ namespace MouseJiggler.Windows.Process
         /// </remarks>
         private async Task ListenLoopAsync(CancellationToken cancellationToken)
         {
-            NamedPipeServerStream? server = null;
+            int consecutiveFailures = 0;
 
-            try
+            while (!cancellationToken.IsCancellationRequested)
             {
-                server = CreateServer();
+                NamedPipeServerStream? server = null;
+                bool counted = false;
 
-                while (!cancellationToken.IsCancellationRequested)
+                try
                 {
-                    try
+                    server = CreateServer();
+
+                    // Counted only once the server exists. Counting on entry would report a
+                    // listener that is still being built, or one asleep between failed
+                    // rebuilds, as accepting.
+                    Interlocked.Increment(ref _activeListeners);
+                    counted = true;
+
+                    while (!cancellationToken.IsCancellationRequested)
                     {
-                        await server.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
+                        try
+                        {
+                            await server.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
 
-                        string request = ReadRequest(server);
-                        string response = Dispatch(request);
+                            string request = ReadRequest(server);
+                            string response = Dispatch(request);
 
-                        byte[] payload = Encoding.UTF8.GetBytes(response);
-                        server.Write(payload, 0, payload.Length);
-                        server.Flush();
+                            byte[] payload = Encoding.UTF8.GetBytes(response);
+                            server.Write(payload, 0, payload.Length);
+                            server.Flush();
 
-                        // Wait for the client to read it. Disconnecting straight after Flush can
-                        // tear the connection down with the response still buffered, and the
-                        // caller then sees a broken pipe instead of an answer.
-                        server.WaitForPipeDrain();
+                            // Wait for the client to read it. Disconnecting straight after
+                            // Flush can tear the connection down with the response still
+                            // buffered, and the caller then sees a broken pipe instead of
+                            // an answer.
+                            server.WaitForPipeDrain();
+
+                            // A whole exchange completed, so the budget is whole again.
+                            // Resetting on a successful rebuild instead would let a fault
+                            // that returns the moment the pipe is remade retry forever.
+                            consecutiveFailures = 0;
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            return;
+                        }
+                        catch (IOException)
+                        {
+                            // A client that went away mid-exchange. Keep serving.
+                        }
+                        finally
+                        {
+                            if (server.IsConnected)
+                            {
+                                server.Disconnect();
+                            }
+                        }
                     }
-                    catch (OperationCanceledException)
+
+                    return;
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+                catch (Exception ex)
+                {
+                        // This listener is finished, but the pool is not. Rebuilding is what
+                        // keeps a passing fault from costing a listener for the life of the
+                        // process, which is what issue #22 was: three of four gone before a
+                        // single client had connected, and one overwritten string to show for
+                        // it.
+                    consecutiveFailures++;
+                    RecordListenerFailure(ex);
+
+                    if (consecutiveFailures >= MaxConsecutiveListenerFailures)
                     {
                         return;
                     }
-                    catch (IOException)
-                    {
-                        // A client that went away mid-exchange. Keep serving.
-                    }
-                    finally
-                    {
-                        if (server.IsConnected)
-                        {
-                            server.Disconnect();
-                        }
-                    }
                 }
-            }
-            catch (OperationCanceledException)
-            {
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                LastListenerError = ex.ToString();
-            }
-            catch (Exception ex)
-            {
-                // The listener runs detached, so an unexpected failure here would otherwise be
-                // invisible and the app would simply never answer a second launch.
-                LastListenerError = ex.ToString();
-            }
-            finally
-            {
-                server?.Dispose();
+                finally
+                {
+                    if (counted)
+                    {
+                        Interlocked.Decrement(ref _activeListeners);
+                    }
+
+                    server?.Dispose();
+                }
+
+                try
+                {
+                    await Task.Delay(ListenerRetryDelayMilliseconds, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
             }
         }
 
-        /// <summary>Set when the listener stopped because of an error.</summary>
+        /// <summary>Records a listener fault so a shrunken pool can be seen rather than inferred.</summary>
+        private void RecordListenerFailure(Exception error)
+        {
+            Interlocked.Increment(ref _listenerFailures);
+            LastListenerError = error.ToString();
+        }
+
+        /// <summary>Set when a listener failed, whether or not it recovered afterwards.</summary>
         public string? LastListenerError { get; private set; }
 
         /// <summary>
-        /// Creates one server instance.
+        /// How many listeners are currently accepting.
         /// </summary>
         /// <remarks>
-        /// Only the first instance of a named pipe may carry a security descriptor. Passing one
-        /// again when a further instance is created fails with access denied, which would kill
-        /// the accept loop and leave the app unreachable after its very first request. Later
-        /// instances inherit the ACL the first one established, so they are created without.
+        /// The pool exists so that one instance is always accepting and a second launch is
+        /// never turned away by timing. A pool that has quietly shrunk still answers, slowly
+        /// and sometimes not at all, which is indistinguishable from working until it matters.
+        /// Counting them is what makes that visible. See issue #22.
+        /// </remarks>
+        public int ActiveListenerCount => Volatile.Read(ref _activeListeners);
+
+        /// <summary>How many listener faults have been recorded since this service started.</summary>
+        public int ListenerFailureCount => Volatile.Read(ref _listenerFailures);
+
+        /// <summary>
+        /// Creates one server instance, always with this pipe's own access rules.
+        /// </summary>
+        /// <remarks>
+        /// Every instance carries the descriptor, including the ones built later. An earlier
+        /// version handed it to the first instance only, on the reasoning that a further
+        /// instance carrying one is refused. That refusal was really the missing
+        /// CreateNewInstance right, and with the right granted the descriptor can be passed
+        /// every time.
+        ///
+        /// Passing it every time is what makes rebuilding safe. A listener that recreates its
+        /// server after the last handle has closed is creating the pipe again, not joining an
+        /// existing one, and a creation without a descriptor takes the default: readable by
+        /// Everyone, including anonymous. The pipe would quietly widen at the exact moment it
+        /// was recovering. See issue #22.
         /// </remarks>
         private NamedPipeServerStream CreateServer()
         {
-            bool firstInstance;
-            lock (_securityGate)
-            {
-                firstInstance = !_securityEstablished;
-                _securityEstablished = true;
-            }
-
-            if (!firstInstance)
-            {
-                return new NamedPipeServerStream(
-                    _pipeName,
-                    PipeDirection.InOut,
-                    NamedPipeServerStream.MaxAllowedServerInstances,
-                    PipeTransmissionMode.Byte,
-                    PipeOptions.Asynchronous,
-                    inBufferSize: IpcCommands.MaxRequestBytes,
-                    outBufferSize: IpcCommands.MaxRequestBytes);
-            }
-
             // Only this user and SYSTEM. Impersonation is refused so a client cannot borrow
             // this process's identity.
             var security = new PipeSecurity();
@@ -279,9 +342,14 @@ namespace MouseJiggler.Windows.Process
             {
                 // Synchronize as well as read and write: without it a client cannot open the
                 // handle at all, and the connect attempt simply times out.
+                // CreateNewInstance as well as read and write. Adding an instance to a pipe
+                // that already exists needs FILE_CREATE_PIPE_INSTANCE, and without it every
+                // listener after the first was refused by the descriptor this process had just
+                // applied itself: up to three of the four gone before a client had connected.
+                // See issue #22.
                 security.AddAccessRule(new PipeAccessRule(
                     currentUser,
-                    PipeAccessRights.ReadWrite | PipeAccessRights.Synchronize,
+                    PipeAccessRights.ReadWrite | PipeAccessRights.Synchronize | PipeAccessRights.CreateNewInstance,
                     AccessControlType.Allow));
             }
 
@@ -361,6 +429,60 @@ namespace MouseJiggler.Windows.Process
         }
 
         /// <summary>
+        /// Sends a command and refuses the answer unless this executable is what answered it.
+        /// </summary>
+        /// <remarks>
+        /// Verifying ownership and then sending the command are two connections, and a check on
+        /// the first says nothing about who answers the second. The gap between them is exactly
+        /// long enough for another server to be the one that replies, and the reply an installer
+        /// acts on is the one that says the application has closed.
+        ///
+        /// The identity is therefore taken from the connection that carried the command, not
+        /// from an earlier one. The kernel is asked which process is on the other end of this
+        /// pipe, and the answer is refused unless that process is running this same executable.
+        /// See issue #22.
+        /// </remarks>
+        public OperationResult<string> SendVerifiedRequest(string command, TimeSpan timeout)
+        {
+            bool resolved = true;
+
+            PipeExchange? exchange = Exchange(command, timeout, serverProcessId =>
+            {
+                string? actualPath = ProcessPathResolver(serverProcessId);
+
+                if (string.IsNullOrEmpty(actualPath))
+                {
+                    resolved = false;
+                    return false;
+                }
+
+                return IsSameExecutable(actualPath!);
+            });
+
+            if (exchange == null)
+            {
+                return OperationResult<string>.Failure(FaultSubsystem.ShellOrIpc, "ipc.noAnswer");
+            }
+
+            if (exchange.RefusedBeforeSending)
+            {
+                if (!exchange.ServerProcessKnown || !resolved)
+                {
+                    return OperationResult<string>.Failure(
+                        FaultSubsystem.ShellOrIpc,
+                        "ipc.identityUnverifiable",
+                        exchange.ServerProcessError,
+                        retryable: false);
+                }
+
+                return OperationResult<string>.Failure(
+                    FaultSubsystem.ShellOrIpc, "ipc.identityMismatch", retryable: false);
+            }
+
+            return OperationResult<string>.Success(exchange.Response);
+        }
+
+        /// <summary>
         /// Asks who owns this session, and confirms the answer against the process that gave it.
         /// </summary>
         /// <remarks>
@@ -434,13 +556,22 @@ namespace MouseJiggler.Windows.Process
         /// <summary>One completed round trip, and who the kernel says answered it.</summary>
         private sealed class PipeExchange
         {
-            public PipeExchange(string response, bool serverProcessKnown, uint serverProcessId, int? serverProcessError)
+            public PipeExchange(
+                string response,
+                bool serverProcessKnown,
+                uint serverProcessId,
+                int? serverProcessError,
+                bool refusedBeforeSending = false)
             {
                 Response = response;
                 ServerProcessKnown = serverProcessKnown;
                 ServerProcessId = serverProcessId;
                 ServerProcessError = serverProcessError;
+                RefusedBeforeSending = refusedBeforeSending;
             }
+
+            /// <summary>The connection was rejected on sight, so the command was never written.</summary>
+            public bool RefusedBeforeSending { get; }
 
             public string Response { get; }
 
@@ -451,7 +582,11 @@ namespace MouseJiggler.Windows.Process
             public int? ServerProcessError { get; }
         }
 
-        private PipeExchange? Exchange(string command, TimeSpan timeout)
+        /// <param name="serverIsAcceptable">
+        /// Consulted once the kernel has named the process on the other end and before a single
+        /// byte of the command is written. Returning false abandons the connection unused.
+        /// </param>
+        private PipeExchange? Exchange(string command, TimeSpan timeout, Func<uint, bool>? serverIsAcceptable = null)
         {
             if (string.IsNullOrEmpty(command))
             {
@@ -495,6 +630,16 @@ namespace MouseJiggler.Windows.Process
                         bool known = NativeMethods.GetNamedPipeServerProcessId(
                             client.SafePipeHandle, out uint serverProcessId);
                         int? error = known ? (int?)null : Marshal.GetLastWin32Error();
+
+                        // Checked before the write, never after. A command verified on the way
+                        // out has already been carried out by whoever received it, so learning
+                        // afterwards that it was the wrong copy tells you which application you
+                        // have just closed rather than stopping you closing it. See issue #22.
+                        if (serverIsAcceptable != null && !(known && serverIsAcceptable(serverProcessId)))
+                        {
+                            return new PipeExchange(
+                                string.Empty, known, serverProcessId, error, refusedBeforeSending: true);
+                        }
 
                         client.Write(payload, 0, payload.Length);
                         client.Flush();

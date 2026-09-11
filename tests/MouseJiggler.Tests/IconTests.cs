@@ -211,6 +211,60 @@ namespace MouseJiggler.Tests
         }
 
         [Fact]
+        public void NoStateDrawsTheMouseSmallerThanTheOthers()
+        {
+            // From issue #21: Running was drawn at 78 percent scale, so the icon shrank the
+            // moment the app started and the change read as the artwork swapping rather than
+            // as the state changing. A state may stand taller than Stopped, because the
+            // schedule and error badges hang below the body, but none may come up short.
+            foreach (int size in Expected)
+            {
+                int stopped = InkHeight(TrayIconFactory.Shape.Stopped, size);
+
+                foreach (TrayIconFactory.Shape shape in Enum.GetValues(typeof(TrayIconFactory.Shape)))
+                {
+                    int height = InkHeight(shape, size);
+
+                    Assert.True(
+                        height >= stopped * 0.9,
+                        shape + " is " + height + " pixels tall at " + size + ", against " +
+                        stopped + " for Stopped. The mouse must not change size between states.");
+                }
+            }
+        }
+
+        /// <summary>The vertical extent of everything the state draws, in pixels.</summary>
+        private static int InkHeight(TrayIconFactory.Shape shape, int size)
+        {
+            using (Icon icon = TrayIconFactory.Create(shape, size))
+            using (Bitmap bitmap = icon.ToBitmap())
+            {
+                int top = size;
+                int bottom = -1;
+
+                for (int y = 0; y < size; y++)
+                {
+                    for (int x = 0; x < size; x++)
+                    {
+                        if (bitmap.GetPixel(x, y).A > 128)
+                        {
+                            if (y < top)
+                            {
+                                top = y;
+                            }
+
+                            bottom = y;
+                            break;
+                        }
+                    }
+                }
+
+                Assert.True(bottom >= 0, shape + " drew nothing at " + size + " pixels.");
+                return bottom - top + 1;
+            }
+        }
+
+        [Fact]
         public void ARequestedSizeOutsideTheSupportedRangeIsRefusedRatherThanClamped()
         {
             Assert.Throws<ArgumentOutOfRangeException>(() => TrayIconFactory.Create(TrayIconFactory.Shape.Running, 7));

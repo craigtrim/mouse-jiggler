@@ -283,5 +283,103 @@ namespace MouseJiggler.Tests
                 }
             });
         }
+
+        // ------------------------------------------------------------------------------------
+        // A command is only as trustworthy as the connection that carried it. See issue #22.
+        //
+        // Checking ownership and then sending the command are two exchanges, and whoever
+        // answered the first is not necessarily whoever answers the second. The pipe now grants
+        // CreateNewInstance so the listener pool can work at all, which means another server can
+        // join while this one is running, so the command's own connection is what gets checked.
+        // ------------------------------------------------------------------------------------
+
+        [Fact]
+        public void AVerifiedCommandIsAnsweredByThisExecutable()
+        {
+            string suffix = Guid.NewGuid().ToString("N");
+
+            using (SingleInstanceService owner = Create(suffix, InstalledPath))
+            using (SingleInstanceService caller = Create(suffix, InstalledPath))
+            {
+                Assert.True(owner.TryAcquireOwnership());
+                owner.RequestHandler = _ => IpcCommands.ResponseOk;
+                owner.StartListening();
+
+                caller.ProcessPathResolver = _ => InstalledPath;
+
+                OperationResult<string> result =
+                    caller.SendVerifiedRequest(IpcCommands.ShutdownForUpdate, Timeout);
+
+                Assert.True(result.Succeeded);
+                Assert.Equal(IpcCommands.ResponseOk, result.Value);
+            }
+        }
+
+        [Fact]
+        public void AVerifiedCommandIsRefusedWhenAnotherExecutableAnswers()
+        {
+            string suffix = Guid.NewGuid().ToString("N");
+
+            using (SingleInstanceService owner = Create(suffix, InstalledPath))
+            using (SingleInstanceService caller = Create(suffix, InstalledPath))
+            {
+                Assert.True(owner.TryAcquireOwnership());
+
+                // The answer is a perfectly good OK. What makes it worthless is who sent it.
+                owner.RequestHandler = _ => IpcCommands.ResponseOk;
+                owner.StartListening();
+
+                // The operating system says a portable copy answered this connection.
+                caller.ProcessPathResolver = _ => PortablePath;
+
+                OperationResult<string> result =
+                    caller.SendVerifiedRequest(IpcCommands.ShutdownForUpdate, Timeout);
+
+                // An installer acting on this would replace files under a running application.
+                Assert.False(result.Succeeded);
+                Assert.Equal("ipc.identityMismatch", result.Outcome.Code);
+            }
+        }
+
+        [Fact]
+        public void AVerifiedCommandIsRefusedWhenTheAnsweringProcessCannotBeResolved()
+        {
+            string suffix = Guid.NewGuid().ToString("N");
+
+            using (SingleInstanceService owner = Create(suffix, InstalledPath))
+            using (SingleInstanceService caller = Create(suffix, InstalledPath))
+            {
+                Assert.True(owner.TryAcquireOwnership());
+                owner.RequestHandler = _ => IpcCommands.ResponseOk;
+                owner.StartListening();
+
+                // Unresolvable is refused rather than shrugged at, because every alternative
+                // means acting on an unverified claim.
+                caller.ProcessPathResolver = _ => null;
+
+                OperationResult<string> result =
+                    caller.SendVerifiedRequest(IpcCommands.ShutdownForUpdate, Timeout);
+
+                Assert.False(result.Succeeded);
+                Assert.Equal("ipc.identityUnverifiable", result.Outcome.Code);
+            }
+        }
+
+        [Fact]
+        public void AVerifiedCommandReportsSilenceDifferentlyFromRefusal()
+        {
+            string suffix = Guid.NewGuid().ToString("N");
+
+            using (SingleInstanceService caller = Create(suffix, InstalledPath))
+            {
+                // Nothing is listening. An installer has to tell "nobody answered" apart from
+                // "somebody answered and was refused", because they mean different things.
+                OperationResult<string> result =
+                    caller.SendVerifiedRequest(IpcCommands.ShutdownForUpdate, TimeSpan.FromMilliseconds(400));
+
+                Assert.False(result.Succeeded);
+                Assert.Equal("ipc.noAnswer", result.Outcome.Code);
+            }
+        }
     }
 }

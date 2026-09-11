@@ -49,6 +49,13 @@ been executed is listed row by row in
 Everything here was found before any release, so none of it ever reached a user. It is recorded
 because each one is a mistake worth not repeating.
 
+- Three of the four single-instance listeners could die the moment the app started. The pipe
+  security descriptor granted the current user read and write but not `CreateNewInstance`, so
+  every listener after the first was refused by the descriptor the process had just applied to
+  itself. Whether it happened at all depended on which listener won the race to create the pipe,
+  which is why it surfaced as an intermittently failing test rather than as a bug report. A
+  listener now rebuilds itself after an unexpected fault rather than leaving the pool a
+  listener short in silence.
 - A truncated settings file started the app. No field was required, so a missing `stopped`
   became `false` and a damaged document parsed cleanly into a running app.
 - A damaged settings file was silently replaced by defaults, and the resulting Error status was

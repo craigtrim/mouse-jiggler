@@ -326,7 +326,12 @@ namespace MouseJiggler.Tests
                 Assert.True(owner.TryAcquireOwnership());
 
                 // The answer is a perfectly good OK. What makes it worthless is who sent it.
-                owner.RequestHandler = _ => IpcCommands.ResponseOk;
+                bool handled = false;
+                owner.RequestHandler = _ =>
+                {
+                    handled = true;
+                    return IpcCommands.ResponseOk;
+                };
                 owner.StartListening();
 
                 // The operating system says a portable copy answered this connection.
@@ -338,6 +343,13 @@ namespace MouseJiggler.Tests
                 // An installer acting on this would replace files under a running application.
                 Assert.False(result.Succeeded);
                 Assert.Equal("ipc.identityMismatch", result.Outcome.Code);
+
+                // And the refusal has to come before the command is sent, not after. A verdict
+                // delivered afterwards would mean this copy had already shut down, and the
+                // caller would be reporting a conflict about an application it just closed.
+                Assert.False(
+                    handled,
+                    "The command reached the handler before the identity was refused, so the wrong copy acted on it.");
             }
         }
 
@@ -350,7 +362,12 @@ namespace MouseJiggler.Tests
             using (SingleInstanceService caller = Create(suffix, InstalledPath))
             {
                 Assert.True(owner.TryAcquireOwnership());
-                owner.RequestHandler = _ => IpcCommands.ResponseOk;
+                bool handled = false;
+                owner.RequestHandler = _ =>
+                {
+                    handled = true;
+                    return IpcCommands.ResponseOk;
+                };
                 owner.StartListening();
 
                 // Unresolvable is refused rather than shrugged at, because every alternative
@@ -362,6 +379,7 @@ namespace MouseJiggler.Tests
 
                 Assert.False(result.Succeeded);
                 Assert.Equal("ipc.identityUnverifiable", result.Outcome.Code);
+                Assert.False(handled, "An unverifiable server was still sent the command.");
             }
         }
 

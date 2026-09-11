@@ -444,32 +444,37 @@ namespace MouseJiggler.Windows.Process
         /// </remarks>
         public OperationResult<string> SendVerifiedRequest(string command, TimeSpan timeout)
         {
-            PipeExchange? exchange = Exchange(command, timeout);
+            bool resolved = true;
+
+            PipeExchange? exchange = Exchange(command, timeout, serverProcessId =>
+            {
+                string? actualPath = ProcessPathResolver(serverProcessId);
+
+                if (string.IsNullOrEmpty(actualPath))
+                {
+                    resolved = false;
+                    return false;
+                }
+
+                return IsSameExecutable(actualPath!);
+            });
 
             if (exchange == null)
             {
                 return OperationResult<string>.Failure(FaultSubsystem.ShellOrIpc, "ipc.noAnswer");
             }
 
-            if (!exchange.ServerProcessKnown)
+            if (exchange.RefusedBeforeSending)
             {
-                return OperationResult<string>.Failure(
-                    FaultSubsystem.ShellOrIpc,
-                    "ipc.identityUnverifiable",
-                    exchange.ServerProcessError,
-                    retryable: false);
-            }
+                if (!exchange.ServerProcessKnown || !resolved)
+                {
+                    return OperationResult<string>.Failure(
+                        FaultSubsystem.ShellOrIpc,
+                        "ipc.identityUnverifiable",
+                        exchange.ServerProcessError,
+                        retryable: false);
+                }
 
-            string? actualPath = ProcessPathResolver(exchange.ServerProcessId);
-
-            if (string.IsNullOrEmpty(actualPath))
-            {
-                return OperationResult<string>.Failure(
-                    FaultSubsystem.ShellOrIpc, "ipc.identityUnverifiable", retryable: false);
-            }
-
-            if (!IsSameExecutable(actualPath!))
-            {
                 return OperationResult<string>.Failure(
                     FaultSubsystem.ShellOrIpc, "ipc.identityMismatch", retryable: false);
             }
@@ -551,13 +556,22 @@ namespace MouseJiggler.Windows.Process
         /// <summary>One completed round trip, and who the kernel says answered it.</summary>
         private sealed class PipeExchange
         {
-            public PipeExchange(string response, bool serverProcessKnown, uint serverProcessId, int? serverProcessError)
+            public PipeExchange(
+                string response,
+                bool serverProcessKnown,
+                uint serverProcessId,
+                int? serverProcessError,
+                bool refusedBeforeSending = false)
             {
                 Response = response;
                 ServerProcessKnown = serverProcessKnown;
                 ServerProcessId = serverProcessId;
                 ServerProcessError = serverProcessError;
+                RefusedBeforeSending = refusedBeforeSending;
             }
+
+            /// <summary>The connection was rejected on sight, so the command was never written.</summary>
+            public bool RefusedBeforeSending { get; }
 
             public string Response { get; }
 
@@ -568,7 +582,11 @@ namespace MouseJiggler.Windows.Process
             public int? ServerProcessError { get; }
         }
 
-        private PipeExchange? Exchange(string command, TimeSpan timeout)
+        /// <param name="serverIsAcceptable">
+        /// Consulted once the kernel has named the process on the other end and before a single
+        /// byte of the command is written. Returning false abandons the connection unused.
+        /// </param>
+        private PipeExchange? Exchange(string command, TimeSpan timeout, Func<uint, bool>? serverIsAcceptable = null)
         {
             if (string.IsNullOrEmpty(command))
             {
@@ -612,6 +630,16 @@ namespace MouseJiggler.Windows.Process
                         bool known = NativeMethods.GetNamedPipeServerProcessId(
                             client.SafePipeHandle, out uint serverProcessId);
                         int? error = known ? (int?)null : Marshal.GetLastWin32Error();
+
+                        // Checked before the write, never after. A command verified on the way
+                        // out has already been carried out by whoever received it, so learning
+                        // afterwards that it was the wrong copy tells you which application you
+                        // have just closed rather than stopping you closing it. See issue #22.
+                        if (serverIsAcceptable != null && !(known && serverIsAcceptable(serverProcessId)))
+                        {
+                            return new PipeExchange(
+                                string.Empty, known, serverProcessId, error, refusedBeforeSending: true);
+                        }
 
                         client.Write(payload, 0, payload.Length);
                         client.Flush();
